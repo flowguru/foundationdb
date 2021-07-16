@@ -85,7 +85,8 @@ struct MockLogSystem : ILogSystem, ReferenceCounted<MockLogSystem> {
 	                                       int8_t primaryLocality,
 	                                       int8_t remoteLocality,
 	                                       const vector<Tag>& allTags,
-	                                       const Reference<AsyncVar<bool>>& recruitmentStalled) final;
+	                                       const Reference<AsyncVar<bool>>& recruitmentStalled,
+                                           std::unordered_map<UID, std::vector<UID>> tlogGroupIdToTlogServerIds) final;
 	LogSystemConfig getLogSystemConfig() const final;
 	Standalone<StringRef> getLogsValue() const final;
 	Future<Void> onLogSystemConfigChange() final;

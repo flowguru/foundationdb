@@ -166,6 +166,7 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 	std::set<int8_t> pseudoLocalities; // Represent special localities that will be mapped to tagLocalityLogRouter
 	const LogEpoch epoch;
 	LogEpoch oldestBackupEpoch;
+    std::unordered_map<UID, std::vector<UID>> tlogGroupIdToTlogServerIds;
 
 	// new members
 	std::map<Tag, Version> pseudoLocalityPopVersion;
@@ -1643,7 +1644,8 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 	                                       int8_t primaryLocality,
 	                                       int8_t remoteLocality,
 	                                       std::vector<Tag> const& allTags,
-	                                       Reference<AsyncVar<bool>> const& recruitmentStalled) final {
+	                                       Reference<AsyncVar<bool>> const& recruitmentStalled,
+                                           std::unordered_map<UID, std::vector<UID>> tlogGroupIdToTlogServerIds) final {
 		return newEpoch(Reference<TagPartitionedLogSystem>::addRef(this),
 		                recr,
 		                fRemoteWorkers,
@@ -1652,7 +1654,8 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 		                primaryLocality,
 		                remoteLocality,
 		                allTags,
-		                recruitmentStalled);
+		                recruitmentStalled,
+                        tlogGroupIdToTlogServerIds);
 	}
 
 	LogSystemConfig getLogSystemConfig() const final {
@@ -1666,6 +1669,7 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 		logSystemConfig.recoveredAt = recoveredAt;
 		logSystemConfig.pseudoLocalities = pseudoLocalities;
 		logSystemConfig.oldestBackupEpoch = oldestBackupEpoch;
+        logSystemConfig.tlogGroupIdToTlogServerIds = tlogGroupIdToTlogServerIds;
 		for (const Reference<LogSet>& logSet : tLogs) {
 			if (logSet->isLocal || remoteLogsWrittenToCoreState) {
 				logSystemConfig.tLogs.emplace_back(*logSet);
@@ -2685,7 +2689,8 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 	                                                    int8_t primaryLocality,
 	                                                    int8_t remoteLocality,
 	                                                    std::vector<Tag> allTags,
-	                                                    Reference<AsyncVar<bool>> recruitmentStalled) {
+	                                                    Reference<AsyncVar<bool>> recruitmentStalled,
+                                                        std::unordered_map<UID, std::vector<UID>> tlogGroupIdToTlogServerIds) {
 		state double startTime = now();
 		state Reference<TagPartitionedLogSystem> logSystem(
 		    new TagPartitionedLogSystem(oldLogSystem->getDebugID(), oldLogSystem->locality, recoveryCount));
@@ -2696,6 +2701,7 @@ struct TagPartitionedLogSystem : ILogSystem, ReferenceCounted<TagPartitionedLogS
 		logSystem->repopulateRegionAntiQuorum = configuration.repopulateRegionAntiQuorum;
 		logSystem->recruitmentID = deterministicRandom()->randomUniqueID();
 		logSystem->txsTags = configuration.tLogVersion >= TLogVersion::V4 ? recr.tLogs.size() : 0;
+        logSystem->tlogGroupIdToTlogServerIds = tlogGroupIdToTlogServerIds;
 		oldLogSystem->recruitmentID = logSystem->recruitmentID;
 
 		if (configuration.usableRegions > 1) {

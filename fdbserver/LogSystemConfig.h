@@ -254,6 +254,7 @@ struct LogSystemConfig {
 	std::set<int8_t> pseudoLocalities;
 	LogEpoch epoch;
 	LogEpoch oldestBackupEpoch;
+    std::unordered_map<UID, vector<UID>> tlogGroupIdToTlogServerIds;
 
 	LogSystemConfig(LogEpoch e = 0)
 	  : logSystemType(LogSystemType::empty), logRouterTags(0), txsTags(0), expectedLogSets(0), stopped(false), epoch(e),

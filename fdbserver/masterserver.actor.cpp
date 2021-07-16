@@ -19,6 +19,7 @@
  */
 
 #include <iterator>
+#include <unordered_map>
 
 #include "fdbclient/FDBTypes.h"
 #include "fdbclient/NativeAPI.actor.h"
@@ -396,6 +397,17 @@ ACTOR Future<Void> newTLogServers(Reference<MasterData> self,
 
 		self->primaryLocality = self->dcId_locality[recr.dcId];
 		self->logSystem = Reference<ILogSystem>(); // Cancels the actors in the previous log system.
+
+        std::unordered_map<UID, std::vector<UID>> tlogGroupIdToTlogServerIds;
+        std::vector<TLogGroupRef> groups = self->tLogGroupCollection -> groups();
+        for (const TLogGroupRef group : groups) {
+            UID groupId = group -> id();
+            std::vector<TLogWorkerDataRef> servers = group -> servers();
+            for (TLogWorkerDataRef workerData : servers) {
+                tlogGroupIdToTlogServerIds[groupId].push_back(workerData -> id);
+            }
+        }
+
 		Reference<ILogSystem> newLogSystem = wait(oldLogSystem->newEpoch(recr,
 		                                                                 fRemoteWorkers,
 		                                                                 self->configuration,
@@ -403,9 +415,20 @@ ACTOR Future<Void> newTLogServers(Reference<MasterData> self,
 		                                                                 self->primaryLocality,
 		                                                                 self->dcId_locality[remoteDcId],
 		                                                                 self->allTags,
-		                                                                 self->recruitmentStalled));
+		                                                                 self->recruitmentStalled,
+                                                                         tlogGroupIdToTlogServerIds));
 		self->logSystem = newLogSystem;
 	} else {
+        std::unordered_map<UID, std::vector<UID>> tlogGroupIdToTlogServerIds;
+        std::vector<TLogGroupRef> groups = self->tLogGroupCollection -> groups();
+        for (const TLogGroupRef group : groups) {
+            UID groupId = group -> id();
+            std::vector<TLogWorkerDataRef> servers = group -> servers();
+            for (TLogWorkerDataRef workerData : servers) {
+                tlogGroupIdToTlogServerIds[groupId].push_back(workerData -> id);
+            }
+        }
+
 		self->primaryLocality = tagLocalitySpecial;
 		self->logSystem = Reference<ILogSystem>(); // Cancels the actors in the previous log system.
 		Reference<ILogSystem> newLogSystem = wait(oldLogSystem->newEpoch(recr,
@@ -415,7 +438,8 @@ ACTOR Future<Void> newTLogServers(Reference<MasterData> self,
 		                                                                 self->primaryLocality,
 		                                                                 tagLocalitySpecial,
 		                                                                 self->allTags,
-		                                                                 self->recruitmentStalled));
+		                                                                 self->recruitmentStalled,
+                                                                         tlogGroupIdToTlogServerIds));
 		self->logSystem = newLogSystem;
 	}
 	return Void();

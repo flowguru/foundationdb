@@ -196,7 +196,8 @@ Future<Reference<ILogSystem>> MockLogSystem::newEpoch(
     int8_t primaryLocality,
     int8_t remoteLocality,
     const vector<Tag>& allTags,
-    const Reference<AsyncVar<bool>>& recruitmentStalled) {
+    const Reference<AsyncVar<bool>>& recruitmentStalled,
+    std::unordered_map<UID, std::vector<UID>> tlogGroupIdToTlogServerIds) {
 	logMethodName(__func__);
 	return Future<Reference<ILogSystem>>();
 }
