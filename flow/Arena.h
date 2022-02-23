@@ -1407,11 +1407,13 @@ inline void load(Archive& ar, VectorRef<T, S>& value) {
 	// FIXME: range checking for length, here and in other serialize code
 	uint32_t length;
 	ar >> length;
+
 	UNSTOPPABLE_ASSERT(length * sizeof(T) < (100 << 20));
 	// SOMEDAY: Can we avoid running constructors for all the values?
 	value.resize(ar.arena(), length);
-	for (uint32_t i = 0; i < length; i++)
+	for (uint32_t i = 0; i < length; i++) {
 		ar >> value[i];
+	}
 }
 template <class Archive, class T, VecSerStrategy S>
 inline void save(Archive& ar, const VectorRef<T, S>& value) {

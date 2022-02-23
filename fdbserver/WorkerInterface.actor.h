@@ -1204,6 +1204,7 @@ ACTOR Future<Void> tLog(
 
 Key persistStorageTeamMessageRefsKey(UID id, StorageTeamID storageTeamId, Version version);
 Key persistStorageTeamMessagesKey(UID id, StorageTeamID storageTeamId, Version version);
+Version decodeVersionFromStorageTeamMessageRefs(KeyRef key, UID id, StorageTeamID storageTeamId);
 } // namespace ptxn
 
 typedef decltype(&tLog) TLogFn;
