@@ -213,7 +213,7 @@ TEST_CASE("/fdbserver/ptxn/test/tLogPeek/cursor/StorageTeamPeekCursor") {
 	// FIXME reportEmptyVersion should reflect the value of (SERVER_KNOBS->INSERT_EMPTY_TRANSACTION ||
 	// SERVER_KNOBS->BROADCAST_TLOG_GROUPS)
 	state std::shared_ptr<ptxn::StorageTeamPeekCursor> pCursor = std::make_shared<ptxn::StorageTeamPeekCursor>(
-	    options.initialVersion, storageTeamID, pInterface.get(), &messageArena);
+	    options.initialVersion, storageTeamID, pInterface.get());
 
 	state Arena arena;
 	state std::vector<ptxn::VersionSubsequenceMessage> messagesFromTLog =
@@ -313,7 +313,6 @@ Future<Void> runMergedCursorTest(ptxn::test::TestTLogPeekMergeCursorOptions opti
 		mergedCursor->addCursor(std::make_shared<ptxn::StorageTeamPeekCursor>(options.initialVersion,
 		                                                                      storageTeamID,
 		                                                                      pInterface.get(),
-		                                                                      &messageArena,
 		                                                                      /* reportEmptyVersion = */ true));
 	}
 
@@ -386,7 +385,6 @@ TEST_CASE("/fdbserver/ptxn/test/tLogPeek/cursor/advanceTo") {
 		mergedCursor->addCursor(std::make_shared<ptxn::StorageTeamPeekCursor>(options.initialVersion,
 		                                                                      storageTeamID,
 		                                                                      pInterface.get(),
-		                                                                      &messageArena,
 		                                                                      /* reportEmptyVersion = */ true));
 	}
 

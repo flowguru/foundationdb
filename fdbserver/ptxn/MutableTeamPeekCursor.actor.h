@@ -129,7 +129,6 @@ std::shared_ptr<StorageTeamPeekCursor> MutableTeamPeekCursor<BaseClass>::createC
 	    BaseClass::currentVersion + 1,
 	    storageTeamID,
 	    tLogInterfaces,
-	    /* pArena */ nullptr,
 	    /* reportEmptyVersion */ true);
 }
 

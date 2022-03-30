@@ -241,21 +241,12 @@ private:
 	const StorageTeamID storageTeamID;
 	std::vector<TLogInterfaceBase*> pTLogInterfaces;
 
-	// The arena used to store incoming serialized data, if not nullptr, TLogPeekReply arenas will be attached to this
-	// arena, enables the access of deserialized data even the cursor is destroyed.
-	Arena* pAttachArena;
-
 	SubsequencedMessageDeserializer deserializer;
 	// The iterator will deserialize the incoming data to an arena on-the-fly. The life-cycle of the arena is the same
 	// to the iterator. If the deserialized data need to be referred in the future, the arena needs to be dependOn
 	// another arena, which is the *pArena in the class. pArena cannot immediately dependOn the arena in the iterator,
 	// so ArenaWrapper has to be used. See the documenation of ArenaWrapper.
-	mutable details::ArenaWrapper<SubsequencedMessageDeserializer::iterator> wrappedDeserializerIter;
-
-	// When the cursor checks remoteMoreAvailable, it depends on an ACTOR which accepts TLogPeekReply. TLogPeekReply
-	// will include an Arena and a StringRef, representing serialized data. We need to add a reference to the Arena so
-	// it will not be GCed after the ACTOR terminates.
-	Arena workArena;
+	mutable SubsequencedMessageDeserializer::iterator wrappedDeserializerIter;
 
 	// The version the cursor begins, all versions that are smaller than beginVersion will be ignored by remote TLog
 	const Version beginVersion;
@@ -279,13 +270,11 @@ public:
 	StorageTeamPeekCursor(const Version& version_,
 	                      const StorageTeamID& storageTeamID_,
 	                      TLogInterfaceBase* pTLogInterface_,
-	                      Arena* pArena_ = nullptr,
 	                      const bool reportEmptyVersion_ = false);
 
 	StorageTeamPeekCursor(const Version& version_,
 	                      const StorageTeamID& storageTeamID_,
 	                      const std::vector<TLogInterfaceBase*>& pTLogInterfaces_,
-	                      Arena* pArena_ = nullptr,
 	                      const bool reportEmptyVersion_ = false);
 
 	bool isEmptyVersionsIgnored() const { return !reportEmptyVersion; }

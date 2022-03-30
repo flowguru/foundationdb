@@ -69,7 +69,7 @@ struct PeekRemoteContext {
 	SubsequencedMessageDeserializer& deserializer;
 
 	// Deserializer iterator
-	ptxn::details::ArenaWrapper<SubsequencedMessageDeserializer::iterator>& wrappedDeserializerIter;
+	SubsequencedMessageDeserializer::iterator& wrappedDeserializerIter;
 
 	// Maximum version from the TLog
 	Version* pMaxKnownVersion;
@@ -77,32 +77,21 @@ struct PeekRemoteContext {
 	// Minimum version that is known being commited
 	Version* pMinKnownCommittedVersion;
 
-	// The pointer to the work arena. The work arena stores the data from TLogPeekReply
-	Arena* pWorkArena;
-
-	// If not null, attach the arena in the reply to this arena, so the mutations will still be
-	// accessible even the deserializer gets destructed.
-	Arena* pAttachArena;
-
 	PeekRemoteContext(const Optional<UID>& debugID_,
 	                  const StorageTeamID& storageTeamID_,
 	                  Version* pLastVersion_,
 	                  const std::vector<TLogInterfaceBase*>& pInterfaces_,
 	                  SubsequencedMessageDeserializer& deserializer_,
-	                  details::ArenaWrapper<SubsequencedMessageDeserializer::iterator>& wrappedDeserializerIterator_,
+	                  SubsequencedMessageDeserializer::iterator& wrappedDeserializerIterator_,
 	                  Version* pMaxKnownVersion_,
-	                  Version* pMinKnownCommittedVersion_,
-	                  Arena* pWorkArena_,
-	                  Arena* pAttachArena_ = nullptr)
+	                  Version* pMinKnownCommittedVersion_)
 	  : debugID(debugID_), storageTeamID(storageTeamID_), pLastVersion(pLastVersion_), pTLogInterfaces(pInterfaces_),
 	    deserializer(deserializer_), wrappedDeserializerIter(wrappedDeserializerIterator_),
-	    pMaxKnownVersion(pMaxKnownVersion_), pMinKnownCommittedVersion(pMinKnownCommittedVersion_),
-	    pWorkArena(pWorkArena_), pAttachArena(pAttachArena_) {
+	    pMaxKnownVersion(pMaxKnownVersion_), pMinKnownCommittedVersion(pMinKnownCommittedVersion_) {
 
 		for (const auto pTLogInterface : pTLogInterfaces) {
 			ASSERT(pTLogInterface != nullptr);
 		}
-		ASSERT(pWorkArena_);
 	}
 };
 
@@ -125,7 +114,7 @@ ACTOR Future<bool> peekRemote(PeekRemoteContext peekRemoteContext) {
 
 	peekRemoteContext.deserializer.reset(reply.arena, reply.data);
 	peekRemoteContext.wrappedDeserializerIter = peekRemoteContext.deserializer.begin();
-	if (peekRemoteContext.wrappedDeserializerIter.get() == peekRemoteContext.deserializer.end()) {
+	if (peekRemoteContext.wrappedDeserializerIter == peekRemoteContext.deserializer.end()) {
 		// No new mutations incoming, and there is no new mutations responded from TLog in this request
 		return false;
 	}
@@ -134,7 +123,6 @@ ACTOR Future<bool> peekRemote(PeekRemoteContext peekRemoteContext) {
 	*peekRemoteContext.pMinKnownCommittedVersion = reply.minKnownCommittedVersion;
 
 	*peekRemoteContext.pLastVersion = reply.endVersion;
-	*peekRemoteContext.pWorkArena = reply.arena;
 
 	return true;
 }
@@ -235,23 +223,19 @@ int VersionSubsequencePeekCursorBase::operatorSpaceship(const VersionSubsequence
 StorageTeamPeekCursor::StorageTeamPeekCursor(const Version& beginVersion_,
                                              const StorageTeamID& storageTeamID_,
                                              TLogInterfaceBase* pTLogInterface_,
-                                             Arena* pArena_,
                                              const bool reportEmptyVersion_)
   : StorageTeamPeekCursor(beginVersion_,
                           storageTeamID_,
                           std::vector<TLogInterfaceBase*>{ pTLogInterface_ },
-                          pArena_,
                           reportEmptyVersion_) {}
 
 StorageTeamPeekCursor::StorageTeamPeekCursor(const Version& beginVersion_,
                                              const StorageTeamID& storageTeamID_,
                                              const std::vector<TLogInterfaceBase*>& pTLogInterfaces_,
-                                             Arena* pArena_,
                                              const bool reportEmptyVersion_)
   : VersionSubsequencePeekCursorBase(), storageTeamID(storageTeamID_), pTLogInterfaces(pTLogInterfaces_),
-    pAttachArena(pArena_),
     deserializer(emptyCursorHeader().arena(), emptyCursorHeader(), /* reportEmptyVersion_ */ true),
-    wrappedDeserializerIter(deserializer.begin(), pArena_), beginVersion(beginVersion_),
+    wrappedDeserializerIter(deserializer.begin()), beginVersion(beginVersion_),
     reportEmptyVersion(reportEmptyVersion_), lastVersion(beginVersion_ - 1) {
 
 	for (const auto pTLogInterface : pTLogInterfaces) {
@@ -276,29 +260,27 @@ Future<bool> StorageTeamPeekCursor::remoteMoreAvailableImpl() {
 	                                                          deserializer,
 	                                                          wrappedDeserializerIter,
 	                                                          &maxKnownVersion,
-	                                                          &minKnownCommittedVersion,
-	                                                          &workArena,
-	                                                          pAttachArena);
+	                                                          &minKnownCommittedVersion);
 
 	return details::StorageTeamPeekCursor::peekRemote(context);
 }
 
 void StorageTeamPeekCursor::nextImpl() {
-	++(wrappedDeserializerIter.get());
+	++(wrappedDeserializerIter);
 }
 
 const VersionSubsequenceMessage& StorageTeamPeekCursor::getImpl() const {
-	return *wrappedDeserializerIter.get();
+	return *wrappedDeserializerIter;
 }
 
 bool StorageTeamPeekCursor::hasRemainingImpl() const {
 	if (!reportEmptyVersion) {
-		while (wrappedDeserializerIter.get() != deserializer.end() &&
-		       wrappedDeserializerIter.get()->message.getType() == Message::Type::EMPTY_VERSION_MESSAGE) {
-			++(wrappedDeserializerIter.get());
+		while (wrappedDeserializerIter != deserializer.end() &&
+		       wrappedDeserializerIter->message.getType() == Message::Type::EMPTY_VERSION_MESSAGE) {
+			++(wrappedDeserializerIter);
 		}
 	}
-	return wrappedDeserializerIter.get() != deserializer.end();
+	return wrappedDeserializerIter != deserializer.end();
 }
 
 void StorageTeamPeekCursor::resetImpl() {
