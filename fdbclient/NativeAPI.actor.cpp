@@ -4262,6 +4262,8 @@ Future<RangeResultFamily> getRange(Reference<TransactionState> trState,
 	state KeySelector originalBegin = begin;
 	state KeySelector originalEnd = end;
 	state RangeResultFamily output;
+	if (limits.hasRowLimit() && limits.rows == 100)
+		std::cout<< "Hfu5Rows=" << limits.rows << "   MinRow " << limits.minRows << std::endl;
 	state Span span("NAPI:getRange"_loc, trState->spanContext);
 	if (useTenant && trState->tenant().present()) {
 		span.addAttribute("tenant"_sr, trState->tenant().get());
@@ -4406,7 +4408,12 @@ Future<RangeResultFamily> getRange(Reference<TransactionState> trState,
 				ASSERT(!rep.more || rep.data.size());
 				ASSERT(!limits.hasRowLimit() || rep.data.size() <= limits.rows);
 
+				bool p = limits.hasRowLimit() && limits.rows == 100;
+				if (p)
+					std::cout<< "Hfu5RowsBeforeDecrement=" << limits.rows << std::endl;
 				limits.decrement(rep.data);
+				if (p)
+					std::cout<< "Hfu5RowsAfterDecrement=" << limits.rows << std::endl;
 
 				if (reverse && begin.isLastLessOrEqual() && rep.data.size() &&
 				    rep.data.end()[-1].key == begin.getKey()) {

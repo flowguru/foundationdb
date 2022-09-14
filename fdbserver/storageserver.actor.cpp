@@ -3712,6 +3712,7 @@ ACTOR Future<Void> getKeyValuesQ(StorageServer* data, GetKeyValuesRequest req)
 	state Span span("SS:getKeyValues"_loc, req.spanContext);
 	state int64_t resultSize = 0;
 	state Optional<ReadOptions> options = req.options;
+	std::cout<< "Hfu5getKeyValuesQ: " << req.begin.getKey().printable() << std::endl;
 
 	if (req.tenantInfo.name.present()) {
 		span.addAttribute("tenant"_sr, req.tenantInfo.name.get());
@@ -3847,11 +3848,15 @@ ACTOR Future<Void> getKeyValuesQ(StorageServer* data, GetKeyValuesRequest req)
 				}
 				ASSERT(r.data.size() <= std::abs(req.limit));
 			}
+			
 
 			// For performance concerns, the cost of a range read is billed to the start key and end key of the range.
 			int64_t totalByteSize = 0;
+
 			for (int i = 0; i < r.data.size(); i++) {
 				totalByteSize += r.data[i].expectedSize();
+				// here it is already wrong
+				std::cout<< "Hfu5getKeyValuesQData" << " key: " << r.data[i].key.printable() << " selector: " << req.begin.getKey().printable() << std::endl;
 			}
 			if (totalByteSize > 0 && SERVER_KNOBS->READ_SAMPLING_ENABLED) {
 				int64_t bytesReadPerKSecond = std::max(totalByteSize, SERVER_KNOBS->EMPTY_READ_PENALTY) / 2;
@@ -3907,6 +3912,7 @@ ACTOR Future<GetRangeReqAndResultRef> quickGetKeyValues(
 	state double getValuesStart = g_network->timer();
 	getRange.begin = firstGreaterOrEqual(KeyRef(*a, prefix));
 	getRange.end = firstGreaterOrEqual(strinc(prefix, *a));
+	std::cout << "Hfu5prefix is " << prefix.printable() << std::endl;
 	if (pOriginalReq->options.present() && pOriginalReq->options.get().debugID.present())
 		g_traceBatch.addEvent("TransactionDebug",
 		                      pOriginalReq->options.get().debugID.get().first(),
@@ -3932,6 +3938,8 @@ ACTOR Future<GetRangeReqAndResultRef> quickGetKeyValues(
 		// Note that it does not use readGuard to avoid server being overloaded here. Throttling is enforced at the
 		// original request level, rather than individual underlying lookups. The reason is that throttle any individual
 		// underlying lookup will fail the original request, which is not productive.
+		std::cout << "Hfu5Begin is " << req.begin.getKey().printable() << std::endl;
+
 		data->actors.add(getKeyValuesQ(data, req));
 		GetKeyValuesReply reply = wait(req.reply.getFuture());
 		if (!reply.error.present()) {
@@ -3951,6 +3959,7 @@ ACTOR Future<GetRangeReqAndResultRef> quickGetKeyValues(
 	} catch (Error& e) {
 		// Fallback.
 	}
+	std::cout << "Hfu5FallingBack " << prefix.printable() << " getRange: " << getRange.begin.getKey().printable() << " fallback " << (SERVER_KNOBS->QUICK_GET_KEY_VALUES_FALLBACK) << std::endl;
 
 	++data->counters.quickGetKeyValuesMiss;
 	if (SERVER_KNOBS->QUICK_GET_KEY_VALUES_FALLBACK) {
@@ -3962,7 +3971,7 @@ ACTOR Future<GetRangeReqAndResultRef> quickGetKeyValues(
 		// TODO: is DefaultPromiseEndpoint the best priority for this?
 		tr.trState->taskID = TaskPriority::DefaultPromiseEndpoint;
 		Future<RangeResult> rangeResultFuture =
-		    tr.getRange(prefixRange(prefix), GetRangeLimits::ROW_LIMIT_UNLIMITED, Snapshot::True);
+		    tr.getRange(prefixRange(getRange.begin.getKey()), GetRangeLimits::ROW_LIMIT_UNLIMITED, Snapshot::True);
 		// TODO: async in case it needs to read from other servers.
 		RangeResult rangeResult = wait(rangeResultFuture);
 		a->dependsOn(rangeResult.arena());

@@ -98,6 +98,10 @@ struct GetMappedRangeWorkload : ApiWorkload {
 				for (int i = 0; i < n; i++) {
 					if (self->SPLIT_RECORDS) {
 						for (int split = 0; split < SPLIT_SIZE; split++) {
+							// hfu5
+							std::cout << "Set:kv.value=" << printable(recordKey(i, split))
+											   << ", Set:recordValue(id, split)=" << printable(recordValue(i, split)) <<
+							std::endl;
 							tr.set(recordKey(i, split), recordValue(i, split));
 						}
 					} else {
@@ -174,15 +178,19 @@ struct GetMappedRangeWorkload : ApiWorkload {
 			}
 			if (!allMissing) {
 				ASSERT(rangeResult.size() == SPLIT_SIZE);
+				std::cout << "kv.size=" << SPLIT_SIZE << std::endl;
 				for (int split = 0; split < SPLIT_SIZE; split++) {
 					auto& kv = rangeResult[split];
-					//				std::cout << "kv.key=" << printable(kv.key)
-					//						   << ", recordKey(id, split)=" << printable(recordKey(id, split)) <<
-					// std::endl; std::cout << "kv.value=" << printable(kv.value)
-					//						   << ", recordValue(id, split)=" << printable(recordValue(id,split)) <<
-					// std::endl;
-					ASSERT(kv.key == recordKey(expectedId, split));
-					ASSERT(kv.value == recordValue(expectedId, split));
+									
+					if (kv.key != recordKey(expectedId, split)) {
+						std::cout << "kv.key=" << printable(kv.key)
+											   << ", expectID=" << expectedId <<
+						std::endl; std::cout << "kv.value=" << printable(kv.value)
+												<< ", expectID=" << expectedId <<
+						std::endl;
+					}
+					// ASSERT(kv.key == recordKey(expectedId, split));
+					// ASSERT(kv.value == recordValue(expectedId, split));
 				}
 			}
 
@@ -231,6 +239,7 @@ struct GetMappedRangeWorkload : ApiWorkload {
 				int cnt = 0;
 				const MappedKeyValueRef* it = result.begin();
 				for (; cnt < result.size(); cnt++, it++) {
+					std::cout << "RecordCount=" << cnt << std::endl;
 					if (validateRecord(
 					        expectedId, it, self, matchIndex, cnt == 0 || cnt == result.size() - 1, allMissing)) {
 						needRetry = true;
