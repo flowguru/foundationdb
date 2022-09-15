@@ -98,10 +98,6 @@ struct GetMappedRangeWorkload : ApiWorkload {
 				for (int i = 0; i < n; i++) {
 					if (self->SPLIT_RECORDS) {
 						for (int split = 0; split < SPLIT_SIZE; split++) {
-							// hfu5
-							std::cout << "Set:kv.value=" << printable(recordKey(i, split))
-											   << ", Set:recordValue(id, split)=" << printable(recordValue(i, split)) <<
-							std::endl;
 							tr.set(recordKey(i, split), recordValue(i, split));
 						}
 					} else {

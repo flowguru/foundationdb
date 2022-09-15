@@ -3970,10 +3970,10 @@ ACTOR Future<GetRangeReqAndResultRef> quickGetKeyValues(
 		}
 		// TODO: is DefaultPromiseEndpoint the best priority for this?
 		tr.trState->taskID = TaskPriority::DefaultPromiseEndpoint;
+		auto range = prefixRange(prefix);
 		Future<RangeResult> rangeResultFuture =
-		    tr.getRange(prefixRange(getRange.begin.getKey()), GetRangeLimits::ROW_LIMIT_UNLIMITED, Snapshot::True);
-		// TODO: async in case it needs to read from other servers.
-		RangeResult rangeResult = wait(rangeResultFuture);
+					tr.getRange(range, GetRangeLimits::ROW_LIMIT_UNLIMITED, Snapshot::True);
+		RangeResult rangeResult = wait(holdWhile(range, rangeResultFuture));
 		a->dependsOn(rangeResult.arena());
 		getRange.result = rangeResult;
 		const double duration = g_network->timer() - getValuesStart;
