@@ -4790,13 +4790,24 @@ ACTOR Future<Void> mapSubquery(StorageServer* data,
                                Key mappedKey) {
 	if (isRangeQuery) {
 		// Use the mappedKey as the prefix of the range query.
-		GetRangeReqAndResultRef getRange = wait(quickGetKeyValues(data, mappedKey, version, pArena, pOriginalReq));
-		if ((!getRange.result.empty() && matchIndex == MATCH_INDEX_MATCHED_ONLY) ||
-		    (getRange.result.empty() && matchIndex == MATCH_INDEX_UNMATCHED_ONLY) || matchIndex == MATCH_INDEX_ALL) {
-			kvm->key = it->key;
-			kvm->value = it->value;
+		try {
+			GetRangeReqAndResultRef getRange = wait(quickGetKeyValues(data, mappedKey, version, pArena, pOriginalReq));
+			if ((!getRange.result.empty() && matchIndex == MATCH_INDEX_MATCHED_ONLY) ||
+				(getRange.result.empty() && matchIndex == MATCH_INDEX_UNMATCHED_ONLY) || matchIndex == MATCH_INDEX_ALL) {
+				kvm->key = it->key;
+				kvm->value = it->value;
+			}
+			kvm->reqAndResult = getRange;
+		} catch (Error& e) {
+			if (e.code() == error_code_quick_get_key_values_miss) {
+				kvm->nonLocal = true;
+				kvm->key = it->key;
+				kvm->value = it->value;
+			} else {
+				throw;
+			}
 		}
-		kvm->reqAndResult = getRange;
+
 	} else {
 		GetValueReqAndResultRef getValue = wait(quickGetValue(data, mappedKey, version, pArena, pOriginalReq));
 		kvm->reqAndResult = getValue;
@@ -4865,6 +4876,7 @@ ACTOR Future<GetMappedKeyValuesReply> mapKeyValues(StorageServer* data,
 			// Clear key value to the default.
 			kvm->key = ""_sr;
 			kvm->value = ""_sr;
+			kvm->nonLocal = false;
 			Key mappedKey = constructMappedKey(it, vt, mappedKeyFormatTuple);
 			// Make sure the mappedKey is always available, so that it's good even we want to get key asynchronously.
 			result.arena.dependsOn(mappedKey.arena());
@@ -4885,6 +4897,19 @@ ACTOR Future<GetMappedKeyValuesReply> mapKeyValues(StorageServer* data,
 			// since we always read the index, so always consider the index size
 			int indexSize = sizeof(KeyValueRef) + input.data[i + offset].expectedSize();
 			int size = indexSize + getMappedKeyValueSize(kvms[i]);
+			if (i + offset == 0) {
+				TraceEvent("Hfu5Layout").detail("SizeOf", sizeof(kvms[i])).detail("Size", size).detail("Index", indexSize);
+				char * buffer = new char[1024];
+				for (int j = 0; j < size; j += 64) {
+					int cnt = 0;
+					memset(buffer, 0, 1024);
+					for (int k = 0; k < 64; k++) {
+						sprintf(buffer + cnt , "%02x ", ((char*)&kvms[i])[j + k]);
+						cnt += 3;
+					}
+					TraceEvent("Hfu5Memory").detail("Content", buffer);
+				}
+			}
 			*remainingLimitBytes -= size;
 			result.data.push_back(result.arena, kvms[i]);
 			if (SERVER_KNOBS->STRICTLY_ENFORCE_BYTE_LIMIT && *remainingLimitBytes <= 0) {

@@ -34,18 +34,20 @@ public class MappedKeyValue extends KeyValue {
 	private final byte[] rangeEnd;
 	private final List<KeyValue> rangeResult;
 	private final int boundaryAndExist;
+	private final int nonLocal;
 
 	// now it has 5 field, key, value, getRange.begin, getRange.end, boundaryAndExist
 	// this needs to change if FDBMappedKeyValue definition is changed.
 	private static final int TOTAL_SERIALIZED_FIELD_FDBMappedKeyValue = 5;
 
 	public MappedKeyValue(byte[] key, byte[] value, byte[] rangeBegin, byte[] rangeEnd, List<KeyValue> rangeResult,
-	               int boundaryAndExist) {
+	               int boundaryAndExist, int nonLocal) {
 		super(key, value);
 		this.rangeBegin = rangeBegin;
 		this.rangeEnd = rangeEnd;
 		this.rangeResult = rangeResult;
 		this.boundaryAndExist = boundaryAndExist;
+		this.nonLocal = nonLocal;
 	}
 
 	public byte[] getRangeBegin() { return rangeBegin; }
@@ -70,7 +72,9 @@ public class MappedKeyValue extends KeyValue {
 		byte[] rangeBegin = takeBytes(offset, bytes, lengths);
 		byte[] rangeEnd = takeBytes(offset, bytes, lengths);
 		byte[] boundaryAndExistBytes = takeBytes(offset, bytes, lengths);
+		byte[] nonLocalBytes = takeBytes(offset, bytes, lengths);
 		int boundaryAndExist = ByteBuffer.wrap(boundaryAndExistBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
+		int nonLocal = ByteBuffer.wrap(nonLocalBytes).order(ByteOrder.LITTLE_ENDIAN).getInt();
 
 		if ((lengths.length - TOTAL_SERIALIZED_FIELD_FDBMappedKeyValue) % 2 != 0) {
 			throw new IllegalArgumentException("There needs to be an even number of lengths!");
@@ -82,7 +86,7 @@ public class MappedKeyValue extends KeyValue {
 			byte[] v = takeBytes(offset, bytes, lengths);
 			rangeResult.add(new KeyValue(k, v));
 		}
-		return new MappedKeyValue(key, value, rangeBegin, rangeEnd, rangeResult, boundaryAndExist);
+		return new MappedKeyValue(key, value, rangeBegin, rangeEnd, rangeResult, boundaryAndExist, nonLocal);
 	}
 
 	static class Offset {
@@ -112,14 +116,15 @@ public class MappedKeyValue extends KeyValue {
 		return Arrays.equals(rangeBegin, rhs.rangeBegin) 
 				&& Arrays.equals(rangeEnd, rhs.rangeEnd)
 				&& Objects.equals(rangeResult, rhs.rangeResult)
-				&& boundaryAndExist == rhs.boundaryAndExist;
+				&& boundaryAndExist == rhs.boundaryAndExist
+				&& nonLocal == rhs.nonLocal;
 	}
 
 	@Override
 	public int hashCode() {
 		int hashForResult = rangeResult == null ? 0 : rangeResult.hashCode();
 		return 17 +
-		    (29 * hashForResult + boundaryAndExist + 37 * Arrays.hashCode(rangeBegin) + Arrays.hashCode(rangeEnd));
+		    (29 * hashForResult + 19 * nonLocal + boundaryAndExist + 37 * Arrays.hashCode(rangeBegin) + Arrays.hashCode(rangeEnd));
 	}
 
 	@Override
@@ -129,6 +134,7 @@ public class MappedKeyValue extends KeyValue {
 		sb.append(", rangeEnd=").append(ByteArrayUtil.printable(rangeEnd));
 		sb.append(", rangeResult=").append(rangeResult);
 		sb.append(", boundaryAndExist=").append(boundaryAndExist);
+		sb.append(", nonLocal=").append(nonLocal);
 		sb.append('}');
 		return super.toString() + "->" + sb.toString();
 	}

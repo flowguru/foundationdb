@@ -183,9 +183,10 @@ struct GetMappedRangeResult {
 		         const std::string& begin,
 		         const std::string& end,
 		         const std::vector<std::pair<std::string, std::string>>& range_results,
-		         fdb_bool_t boundaryAndExist)
+		         fdb_bool_t boundaryAndExist, 
+				 fdb_bool_t nonLocal)
 		  : key(key), value(value), begin(begin), end(end), range_results(range_results),
-		    boundaryAndExist(boundaryAndExist) {}
+		    boundaryAndExist(boundaryAndExist),nonLocal(nonLocal) {}
 
 		std::string key;
 		std::string value;
@@ -193,6 +194,7 @@ struct GetMappedRangeResult {
 		std::string end;
 		std::vector<std::pair<std::string, std::string>> range_results;
 		fdb_bool_t boundaryAndExist;
+		fdb_bool_t nonLocal;
 	};
 	std::vector<MappedKV> mkvs;
 	// True if values remain in the key range requested.
@@ -318,6 +320,7 @@ GetMappedRangeResult get_mapped_range(fdb::Transaction& tr,
 		auto begin = extractString(mkv.getRange.begin.key);
 		auto end = extractString(mkv.getRange.end.key);
 		bool boundaryAndExist = mkv.boundaryAndExist;
+		bool nonLocal = mkv.nonLocal;
 		//		std::cout << "key:" << key << " value:" << value << " begin:" << begin << " end:" << end << std::endl;
 
 		std::vector<std::pair<std::string, std::string>> range_results;
@@ -328,7 +331,7 @@ GetMappedRangeResult get_mapped_range(fdb::Transaction& tr,
 			range_results.emplace_back(k, v);
 			// std::cout << "[" << i << "]" << k << " -> " << v << std::endl;
 		}
-		result.mkvs.emplace_back(key, value, begin, end, range_results, boundaryAndExist);
+		result.mkvs.emplace_back(key, value, begin, end, range_results, boundaryAndExist, nonLocal);
 	}
 	return result;
 }

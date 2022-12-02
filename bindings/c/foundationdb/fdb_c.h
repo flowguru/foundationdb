@@ -170,6 +170,7 @@ typedef struct mappedkeyvalue {
 	FDBGetRangeReqAndResult getRange;
 	unsigned char buffer[32];
 	fdb_bool_t boundaryAndExist;
+	fdb_bool_t nonLocal;
 } FDBMappedKeyValue;
 
 #pragma pack(push, 4)
