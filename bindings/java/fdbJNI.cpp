@@ -612,9 +612,9 @@ JNIEXPORT jobject JNICALL Java_com_apple_foundationdb_FutureMappedResults_Future
 		FDBMappedKeyValue kvm = kvms[i];
 		int kvm_count = kvm.getRange.m_size;
 
-		// now it has 5 field, key, value, getRange.begin, getRange.end, boundaryAndExist
+		// now it has 6 field, key, value, getRange.begin, getRange.end, boundaryAndExist, nonLocal
 		// this needs to change if FDBMappedKeyValue definition is changed.
-		const int totalFieldFDBMappedKeyValue = 5;
+		const int totalFieldFDBMappedKeyValue = 6;
 
 		const int totalLengths = totalFieldFDBMappedKeyValue + kvm_count * 2;
 
