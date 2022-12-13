@@ -160,9 +160,9 @@ ThreadFuture<MappedRangeResult> DLTransaction::getMappedRange(const KeySelectorR
                                                               const KeySelectorRef& end,
                                                               const StringRef& mapper,
                                                               GetRangeLimits limits,
-                                                              int matchIndex,
                                                               bool snapshot,
-                                                              bool reverse) {
+                                                              bool reverse,
+                                                              int matchIndex) {
 	FdbCApi::FDBFuture* f = api->transactionGetMappedRange(tr,
 	                                                       begin.getKey().begin(),
 	                                                       begin.getKey().size(),
@@ -178,9 +178,9 @@ ThreadFuture<MappedRangeResult> DLTransaction::getMappedRange(const KeySelectorR
 	                                                       limits.bytes,
 	                                                       FDB_STREAMING_MODE_EXACT,
 	                                                       0,
-	                                                       matchIndex,
 	                                                       snapshot,
-	                                                       reverse);
+	                                                       reverse,
+	                                                       matchIndex);
 	return toThreadFuture<MappedRangeResult>(api, f, [](FdbCApi::FDBFuture* f, FdbCApi* api) {
 		const FdbCApi::FDBMappedKeyValue* kvms;
 		int count;
@@ -1340,17 +1340,17 @@ ThreadFuture<MappedRangeResult> MultiVersionTransaction::getMappedRange(const Ke
                                                                         const KeySelectorRef& end,
                                                                         const StringRef& mapper,
                                                                         GetRangeLimits limits,
-                                                                        int matchIndex,
                                                                         bool snapshot,
-                                                                        bool reverse) {
+                                                                        bool reverse,
+                                                                        int matchIndex) {
 	return executeOperation(&ITransaction::getMappedRange,
 	                        begin,
 	                        end,
 	                        mapper,
 	                        std::forward<GetRangeLimits>(limits),
-	                        std::forward<int>(matchIndex),
 	                        std::forward<bool>(snapshot),
-	                        std::forward<bool>(reverse));
+	                        std::forward<bool>(reverse),
+	                        std::forward<int>(matchIndex));
 }
 
 ThreadFuture<Standalone<StringRef>> MultiVersionTransaction::getVersionstamp() {

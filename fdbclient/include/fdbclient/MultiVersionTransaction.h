@@ -296,9 +296,9 @@ struct FdbCApi : public ThreadSafeReferenceCounted<FdbCApi> {
 	                                        int targetBytes,
 	                                        FDBStreamingMode mode,
 	                                        int iteration,
-	                                        int matchIndex,
 	                                        fdb_bool_t snapshot,
-	                                        fdb_bool_t reverse);
+	                                        fdb_bool_t reverse,
+	                                        int matchIndex);
 	FDBFuture* (*transactionGetVersionstamp)(FDBTransaction* tr);
 
 	void (*transactionSet)(FDBTransaction* tr,
@@ -457,9 +457,9 @@ public:
 	                                               const KeySelectorRef& end,
 	                                               const StringRef& mapper,
 	                                               GetRangeLimits limits,
-	                                               int matchIndex,
 	                                               bool snapshot,
-	                                               bool reverse) override;
+	                                               bool reverse,
+	                                               int matchIndex) override;
 	ThreadFuture<Standalone<VectorRef<const char*>>> getAddressesForKey(const KeyRef& key) override;
 	ThreadFuture<Standalone<StringRef>> getVersionstamp() override;
 	ThreadFuture<int64_t> getEstimatedRangeSizeBytes(const KeyRangeRef& keys) override;
@@ -684,9 +684,9 @@ public:
 	                                               const KeySelectorRef& end,
 	                                               const StringRef& mapper,
 	                                               GetRangeLimits limits,
-	                                               int matchIndex,
 	                                               bool snapshot,
-	                                               bool reverse) override;
+	                                               bool reverse,
+	                                               int matchIndex) override;
 	ThreadFuture<Standalone<VectorRef<const char*>>> getAddressesForKey(const KeyRef& key) override;
 	ThreadFuture<Standalone<StringRef>> getVersionstamp() override;
 
