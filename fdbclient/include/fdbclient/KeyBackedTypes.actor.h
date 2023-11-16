@@ -362,7 +362,6 @@ public:
 
 	template <class Transaction>
 	Future<Optional<T>> get(Transaction tr, Snapshot snapshot = Snapshot::False) const {
-
 		if constexpr (is_transaction_creator<Transaction>) {
 			return runTransaction(tr, [=, self = *this](decltype(tr->createTransaction()) tr) {
 				if constexpr (SystemAccess) {
@@ -424,6 +423,28 @@ public:
 	}
 
 	template <class TransactionContext>
+	std::enable_if_t<is_transaction_creator<TransactionContext>, Future<Void>> atomicOp(TransactionContext tcx, 
+			T const& val, MutationRef::Type type) {
+		// MutationRef::SetVersionstampedValue
+		return runTransaction(tcx, [this, val, type](decltype(tcx->createTransaction()) tr) {
+			if constexpr (SystemAccess) {
+				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+			}
+			tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+			atomicOp(tr, val, type);
+			return Future<Void>(Void());
+		});
+	}
+
+	template <class Transaction>
+	std::enable_if_t<!is_transaction_creator<Transaction>, void> atomicOp(Transaction tr, T const& val, MutationRef::Type type) {
+		tr->atomicOp(key, val, type);// hfu5 here
+		if (trigger.present()) {
+			trigger->update(tr);
+		}
+	}
+
+	template <class TransactionContext>
 	std::enable_if_t<is_transaction_creator<TransactionContext>, Future<Void>> set(TransactionContext tcx,
 	                                                                               T const& val) {
 		return runTransaction(tcx, [this, val](decltype(tcx->createTransaction()) tr) {
@@ -438,7 +459,7 @@ public:
 
 	template <class Transaction>
 	std::enable_if_t<!is_transaction_creator<Transaction>, void> set(Transaction tr, T const& val) {
-		tr->set(key, packValue(val));
+		tr->set(key, packValue(val));// hfu5 here
 		if (trigger.present()) {
 			trigger->update(tr);
 		}

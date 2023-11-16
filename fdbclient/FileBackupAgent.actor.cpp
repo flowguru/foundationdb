@@ -3435,8 +3435,10 @@ struct StartFullBackupTaskFunc : BackupTaskFuncBase {
 				auto it = std::find_if(
 				    ids.begin(), ids.end(), [uid](const std::pair<UID, Version>& p) { return p.first == uid; });
 				if (it == ids.end()) {
+					// if not exist, then set it in ids and save it back
 					ids.emplace_back(uid, Params.beginVersion().get(task));
 				} else {
+					// if already exist, update local
 					Params.beginVersion().set(task, it->second);
 				}
 
@@ -3450,10 +3452,23 @@ struct StartFullBackupTaskFunc : BackupTaskFuncBase {
 					watchFuture = tr->watch(config.allWorkerStarted().key);
 				}
 
+				TraceEvent("Hfu5FileBackupAgentBlocking").log();
 				wait(keepRunning);
 				wait(tr->commit());
 				if (!taskStarted.get().present()) {
 					wait(watchFuture);
+					TraceEvent("Hfu5FileBackupAgentUnblocked").log();
+					// tr->reset();
+					// tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+					// tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+					// started = tr->get(backupStartedKey);
+					// taskStarted = tr->get(config.allWorkerStarted().key);
+					// wait(success(started) && success(taskStarted) && success(partitionedLog));
+					// if(!taskStarted.get().present() || !started.get().present()) {
+					// 	// it should always exist here
+					// 	throw;
+					// }
+					// ids = decodeBackupStartedValue(started.get().get());
 				}
 				return Void();
 			} catch (Error& e) {

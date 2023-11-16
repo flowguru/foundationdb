@@ -185,6 +185,7 @@ struct BackupData {
 
 			loop {
 				try {
+					tr->reset();
 					tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 					tr->setOption(FDBTransactionOptions::LOCK_AWARE);
 					tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
@@ -193,6 +194,7 @@ struct BackupData {
 					    wait(config.startedBackupWorkers().get(tr));
 					workers = tmp;
 					if (!updated) {
+						// add this worker's info into "workers" vector
 						if (workers.present()) {
 							workers.get().emplace_back(self->recruitedEpoch, (int64_t)self->tag.id);
 						} else {
@@ -218,7 +220,6 @@ struct BackupData {
 							tags.insert(p.second);
 						}
 						if (self->totalTags == tags.size()) {
-							config.allWorkerStarted().set(tr, true);
 							allUpdated = true;
 						} else {
 							// monitor all workers' updates
@@ -237,17 +238,58 @@ struct BackupData {
 
 						updated = true; // Only set to true after commit.
 						if (allUpdated) {
+							tr->reset();
+							tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+							tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+							tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
+							Key placeHolder = "0123456789\x00\x00\x00\x00"_sr;
+							config.allWorkerStarted().atomicOp(tr, placeHolder, MutationRef::SetVersionstampedValue);
+							state Future<Standalone<StringRef>> fTrVs = tr->getVersionstamp();
+							wait(tr->commit());
+							state Version commitVersion = tr->getCommittedVersion();
+							Standalone<StringRef> committedVersionStamp_ = wait(fTrVs);
+							TraceEvent("Hfu5UpdateAllWorkerFinished")
+								.detail("TxnVersionStamp", committedVersionStamp_.toHexString())
+								.detail("Len", committedVersionStamp_.toHexString().size())
+								.detail("CommittedVersion", commitVersion)
+								.log();
+							// tr->reset();
+							// tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+							// tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+							// tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
+							// Optional<Value> taskStarted = wait(tr->get(config.allWorkerStarted().key));
+							// if (taskStarted.present()) {
+							// 	Value val = taskStarted.get();
+							// 	const uint8_t* b = val.begin();
+							// 	int size = val.size();
+							// 	for (int i = 0; i < size; i++) {
+							// 		uint8_t c = *(b + i);
+							// 		TraceEvent("Hfu5Print1111")
+							// 			.detail("Size", size)
+							// 			.detail("Letter", c)
+							// 			.log();
+							// 	}
+							// 	TraceEvent("Hfu5ReadVersion")
+							// 		.detail("V", val.toHexString())
+							// 		.detail("V", val.toHexString())
+							// 		.detail("Saved", self->savedVersion).log();
+							// }
 							break;
 						}
 						wait(watchFuture);
 						tr->reset();
 					} else {
+						// update startedBackupWorkers's value to "workers"
 						ASSERT(workers.present() && workers.get().size() > 0);
 						config.startedBackupWorkers().set(tr, workers.get());
 						wait(tr->commit());
 						break;
 					}
 				} catch (Error& e) {
+					TraceEvent("Hfu5CommitError")
+						.detail("FirstWorker", firstWorker)
+						.errorUnsuppressed(e)
+						.log();
 					wait(tr->onError(e));
 					allUpdated = false;
 				}
@@ -432,6 +474,13 @@ struct BackupData {
 			// is already popped. Advance the version is safe because these
 			// versions are not popped -- if they are popped, their progress should
 			// be already recorded and Master would use a higher version than minVersion.
+			TraceEvent("Hfu5ChangeSavedVersion")
+				.detail("BcakupEpoch", backupEpoch)
+				.detail("RecruitedEpoch", recruitedEpoch)
+				.detail("SavedVersion", savedVersion)
+				.detail("MinVersion", minVersion)
+				.detail("StartVersion", startVersion)
+				.log();
 			savedVersion = std::max(minVersion, savedVersion);
 		}
 		if (modified)
@@ -511,21 +560,44 @@ ACTOR Future<bool> monitorBackupStartedKeyChanges(BackupData* self, bool present
 				tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 				tr.setOption(FDBTransactionOptions::LOCK_AWARE);
 				Optional<Value> value = wait(tr.get(backupStartedKey));
-				std::vector<std::pair<UID, Version>> uidVersions;
-				bool shouldExit = self->endVersion.present();
+				state std::vector<std::pair<UID, Version>> uidVersions;
+				state bool shouldExit = self->endVersion.present();
+				state int i = 0;
 				if (value.present()) {
 					uidVersions = decodeBackupStartedValue(value.get());
-					TraceEvent e("BackupWorkerGotStartKey", self->myId);
-					int i = 1;
+					// hfu5: backupStarted Key is read here
+					state TraceEvent e("BackupWorkerGotStartKey", self->myId);
 					for (auto [uid, version] : uidVersions) {
+						state UID uuid = uid;
 						e.detail(format("BackupID%d", i), uid).detail(format("Version%d", i), version);
 						i++;
 						if (shouldExit && version < self->endVersion.get()) {
 							shouldExit = false;
 						}
+						BackupConfig config(uid);
+						// do not use backupStarted, instead use allWorkerStarted, this is more accurate
+						Optional<Value> taskStarted = wait(tr.get(config.allWorkerStarted().key));
+						// TraceEvent("Hfu5MonitorAllWorkerStarted").detail("UID", uuid).detail("Present", taskStarted.present()).log();
+						if (taskStarted.present()) {
+							Value str = taskStarted.get();
+							int64_t vv = 0;
+							// only take the first 8 bytes, although its 10 bytes, not sure why, maybe its truncated
+							for (int j = 0; j < 8; j++) {
+								uint8_t cc = str[j];
+								vv *= 256;
+								vv += cc;
+							}
+							TraceEvent("Hfu5TaskVersion")
+								.detail("V", vv)
+								.detail("TagID", self->tag.id)
+								.detail("Saved", self->savedVersion)
+								.log();
+							self->savedVersion = std::max(self->savedVersion, vv);
+						}
 					}
 					self->exitEarly = shouldExit;
 					self->onBackupChanges(uidVersions);
+					// hfu5: it returns when backupStarted key is set
 					if (present || !watch)
 						return true;
 				} else {
@@ -561,7 +633,7 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 
 			state std::vector<Future<Optional<Version>>> prevVersions;
 			state std::vector<BackupConfig> versionConfigs;
-			state std::vector<Future<Optional<bool>>> allWorkersReady;
+			state std::vector<Future<Optional<Key>>> allWorkersReady;
 			for (const auto& [uid, version] : savedLogVersions) {
 				versionConfigs.emplace_back(uid);
 				prevVersions.push_back(versionConfigs.back().latestBackupWorkerSavedVersion().get(tr));
@@ -571,9 +643,10 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 			wait(waitForAll(prevVersions) && waitForAll(allWorkersReady));
 
 			for (int i = 0; i < prevVersions.size(); i++) {
-				if (!allWorkersReady[i].get().present() || !allWorkersReady[i].get().get())
+				if (!allWorkersReady[i].get().present()) {
+					// hfu5, to verify the value
 					continue;
-
+				}
 				const Version current = savedLogVersions[versionConfigs[i].getUid()];
 				if (prevVersions[i].get().present()) {
 					const Version prev = prevVersions[i].get().get();
@@ -922,6 +995,9 @@ ACTOR Future<Void> uploadData(BackupData* self) {
 		}
 
 		if (popVersion > self->savedVersion && popVersion > self->popVersion) {
+			// hfu5: saveProgress is called here, but not in NOOP mode. 
+			// Thus there might be race condition when 1 backup runs in NOOP mode popping, ther other backup start and not seeing
+			// certain versions being popped and try to get it from TLog.
 			wait(saveProgress(self, popVersion));
 			TraceEvent("BackupWorkerSavedProgress", self->myId)
 			    .detail("Tag", self->tag.toString())
@@ -943,12 +1019,15 @@ ACTOR Future<Void> uploadData(BackupData* self) {
 
 // Pulls data from TLog servers using LogRouter tag.
 ACTOR Future<Void> pullAsyncData(BackupData* self) {
+	TraceEvent("BackupWorkerPull", self->myId)
+	    .detail("SavedVersion", self->savedVersion)
+	    .detail("PopVersion", self->popVersion)
+	    .log();
 	state Future<Void> logSystemChange = Void();
 	state Reference<ILogSystem::IPeekCursor> r;
 	state Version tagAt = std::max(self->pulledVersion.get(), std::max(self->startVersion, self->savedVersion));
 	state Arena prev;
 
-	TraceEvent("BackupWorkerPull", self->myId).log();
 	loop {
 		while (self->paused.get()) {
 			wait(self->paused.onChange());
@@ -973,6 +1052,8 @@ ACTOR Future<Void> pullAsyncData(BackupData* self) {
 		if (r->popped() > 0) {
 			TraceEvent(SevWarn, "BackupWorkerPullMissingMutations", self->myId)
 			    .detail("Tag", self->tag)
+			    .detail("Start", self->startVersion)
+			    .detail("Saved", self->savedVersion)
 			    .detail("BackupEpoch", self->backupEpoch)
 			    .detail("Popped", r->popped())
 			    .detail("ExpectedPeekVersion", tagAt);
@@ -1016,10 +1097,20 @@ ACTOR Future<Void> pullAsyncData(BackupData* self) {
 
 ACTOR Future<Void> monitorBackupKeyOrPullData(BackupData* self, bool keyPresent) {
 	state Future<Void> pullFinished = Void();
-
+	TraceEvent("MonitorBackupActor", self->myId)
+	    .detail("SavedVersion", self->savedVersion)
+	    .detail("PopVersion", self->popVersion)
+	    .detail("KeyPresent", keyPresent)
+	    .log();
 	loop {
 		state Future<bool> present = monitorBackupStartedKeyChanges(self, !keyPresent, /*watch=*/true);
+		// NOOP mode is quitted once each backup worker found out the `backupStartedKey` is set
+		// so it is always earlier than the allWorkerStarted
 		if (keyPresent) {
+			// TraceEvent("Hfu5StartPull", self->myId)
+			//     .detail("SavedVersion", self->savedVersion)
+			//     .detail("PopVersion", self->popVersion)
+			//     .log();
 			pullFinished = pullAsyncData(self);
 			self->pulling = true;
 			wait(success(present) || pullFinished);
@@ -1041,6 +1132,10 @@ ACTOR Future<Void> monitorBackupKeyOrPullData(BackupData* self, bool keyPresent)
 
 			loop choose {
 				when(wait(success(present))) {
+					// TraceEvent("Hfu5Present", self->myId)
+					//     .detail("SavedVersion", self->savedVersion)
+					//     .detail("PopVersion", self->popVersion)
+					//     .log();
 					break;
 				}
 				when(wait(success(committedVersion) || delay(SERVER_KNOBS->BACKUP_NOOP_POP_DELAY, self->cx->taskID))) {
@@ -1049,9 +1144,12 @@ ACTOR Future<Void> monitorBackupKeyOrPullData(BackupData* self, bool keyPresent)
 						    std::max(self->popVersion, std::max(committedVersion.get(), self->savedVersion));
 						self->minKnownCommittedVersion =
 						    std::max(committedVersion.get(), self->minKnownCommittedVersion);
+						// wait(saveProgress(self, self->popVersion));
+						self->savedVersion = std::max(self->popVersion, self->savedVersion);
 						TraceEvent("BackupWorkerNoopPop", self->myId)
 						    .detail("SavedVersion", self->savedVersion)
-						    .detail("PopVersion", self->popVersion);
+						    .detail("PopVersion", self->popVersion)
+						    .log();
 						self->pop(); // Pop while the worker is in this NOOP state.
 						committedVersion = Never();
 					} else {
@@ -1125,8 +1223,11 @@ ACTOR Future<Void> backupWorker(BackupInterface interf,
 	    .detail("StartVersion", req.startVersion)
 	    .detail("EndVersion", req.endVersion.present() ? req.endVersion.get() : -1)
 	    .detail("LogEpoch", req.recruitedEpoch)
+	    .detail("Saved", self.savedVersion)
 	    .detail("BackupEpoch", req.backupEpoch);
 	try {
+		// hfu5: savedVersion is updated but not to the latest updated by noop mode.
+		// it should be updated in the next lines below
 		addActor.send(checkRemoved(db, req.recruitedEpoch, &self));
 		addActor.send(waitFailureServer(interf.waitFailure.getFuture()));
 		if (req.recruitedEpoch == req.backupEpoch && req.routerTag.id == 0) {
@@ -1134,11 +1235,17 @@ ACTOR Future<Void> backupWorker(BackupInterface interf,
 		}
 		addActor.send(monitorWorkerPause(&self));
 
+		TraceEvent("BackupWorkerWaitKeyBeforeMonitor", self.myId)
+		    .detail("Saved", self.savedVersion)
+		    .detail("ExitEarly", self.exitEarly);
 		// Check if backup key is present to avoid race between this check and
 		// noop pop as well as upload data: pop or skip upload before knowing
 		// there are backup keys. Set the "exitEarly" flag if needed.
 		bool present = wait(monitorBackupStartedKeyChanges(&self, true, false));
-		TraceEvent("BackupWorkerWaitKey", self.myId).detail("Present", present).detail("ExitEarly", self.exitEarly);
+		TraceEvent("BackupWorkerWaitKey", self.myId)
+		    .detail("Present", present)
+		    .detail("Saved", self.savedVersion)
+		    .detail("ExitEarly", self.exitEarly);
 
 		pull = self.exitEarly ? Void() : monitorBackupKeyOrPullData(&self, present);
 		addActor.send(pull);
