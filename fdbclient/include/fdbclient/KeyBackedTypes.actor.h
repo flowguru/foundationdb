@@ -534,6 +534,8 @@ public:
 
 	// hfu5: can i use this method? but all instantiation of KeyBackedBinaryValue is int64
 	// how can can we just append StringRef(reinterpret_cast<uint8_t*>(&offset), 4)?
+	// and when return, we can only get int64, which is wrong
+	// need to use VersionStamp as template param here.
 	template <class Transaction>
 	void setVersionstamp(Transaction tr, T const& val, int offset) {
 		tr->atomicOp(

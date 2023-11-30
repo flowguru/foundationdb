@@ -242,8 +242,9 @@ struct BackupData {
 							tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 							tr->setOption(FDBTransactionOptions::LOCK_AWARE);
 							tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
-							Key placeHolder = "0123456789\x00\x00\x00\x00"_sr;
-							config.allWorkerStarted().atomicOp(tr, placeHolder, MutationRef::SetVersionstampedValue);
+							// Key placeHolder = "0123456789\x00\x00\x00\x00"_sr;
+							// config.allWorkerStarted().setVersionstamp(tr, placeHolder, 0);
+							config.allWorkerStarted().setVersionstamp(tr, Versionstamp(), 0);
 							state Future<Standalone<StringRef>> fTrVs = tr->getVersionstamp();
 							wait(tr->commit());
 							state Version commitVersion = tr->getCommittedVersion();
@@ -286,10 +287,6 @@ struct BackupData {
 						break;
 					}
 				} catch (Error& e) {
-					TraceEvent("Hfu5CommitError")
-						.detail("FirstWorker", firstWorker)
-						.errorUnsuppressed(e)
-						.log();
 					wait(tr->onError(e));
 					allUpdated = false;
 				}
@@ -632,24 +629,20 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 
 			state std::vector<Future<Optional<Version>>> prevVersions;
 			state std::vector<BackupConfig> versionConfigs;
-			state std::vector<Future<Optional<Key>>> allWorkersReady;
+			state std::vector<Future<Optional<Versionstamp>>> allWorkersReady;
 			for (const auto& [uid, version] : savedLogVersions) {
 				versionConfigs.emplace_back(uid);
 				prevVersions.push_back(versionConfigs.back().latestBackupWorkerSavedVersion().get(tr));
-				// hfu5: it seems to fail here, tuple cannot be read
-				// hfu5 : or to not use this BackupConfig as a reader/writer
 				allWorkersReady.push_back(versionConfigs.back().allWorkerStarted().get(tr));
 			}
 
 			wait(waitForAll(prevVersions) && waitForAll(allWorkersReady));
-			TraceEvent("Hfu522222222").log();
 
 			for (int i = 0; i < prevVersions.size(); i++) {
 				if (!allWorkersReady[i].get().present()) {
-					// hfu5, to verify the value
-					TraceEvent("Hfu5PrintAllWorkersReady").detail("Key", allWorkersReady[i].get().get()).log();
 					continue;
 				}
+				TraceEvent("Hfu5PrintAllWorkersReady").detail("Key", allWorkersReady[i].get().get()).log();
 				const Version current = savedLogVersions[versionConfigs[i].getUid()];
 				if (prevVersions[i].get().present()) {
 					const Version prev = prevVersions[i].get().get();
