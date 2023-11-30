@@ -879,7 +879,6 @@ public:
 	KeyBackedProperty<Reference<IBackupContainer>> backupContainer() { return configSpace.pack(__FUNCTION__sr); }
 
 	// Set to true when all backup workers for saving mutation logs have been started.
-	// configSpace::pack() returns a Key, how can we return a `KeyBackedProperty`
 	KeyBackedProperty<Key> allWorkerStarted() { return configSpace.pack(__FUNCTION__sr); }
 
 	// Each backup worker adds its (epoch, tag.id) to this property.

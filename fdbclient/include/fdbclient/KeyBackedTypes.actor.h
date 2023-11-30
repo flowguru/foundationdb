@@ -438,7 +438,7 @@ public:
 
 	template <class Transaction>
 	std::enable_if_t<!is_transaction_creator<Transaction>, void> atomicOp(Transaction tr, T const& val, MutationRef::Type type) {
-		tr->atomicOp(key, val, type);// hfu5 here
+		tr->atomicOp(key, val, type);
 		if (trigger.present()) {
 			trigger->update(tr);
 		}
@@ -459,7 +459,7 @@ public:
 
 	template <class Transaction>
 	std::enable_if_t<!is_transaction_creator<Transaction>, void> set(Transaction tr, T const& val) {
-		tr->set(key, packValue(val));// hfu5 here
+		tr->set(key, packValue(val));
 		if (trigger.present()) {
 			trigger->update(tr);
 		}

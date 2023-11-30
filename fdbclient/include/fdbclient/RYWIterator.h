@@ -87,6 +87,7 @@ public:
 	}
 
 	static ValueRef getRandomVersionstampValue(Arena& arena) {
+		// hfu5: what is the format here?
 		int len = deterministicRandom()->randomInt(10, 98);
 		std::string value = std::string(len, 'x');
 		int32_t pos = deterministicRandom()->randomInt(0, len - 9);

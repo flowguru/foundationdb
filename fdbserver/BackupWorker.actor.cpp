@@ -587,11 +587,11 @@ ACTOR Future<bool> monitorBackupStartedKeyChanges(BackupData* self, bool present
 								vv *= 256;
 								vv += cc;
 							}
-							TraceEvent("Hfu5TaskVersion")
-								.detail("V", vv)
-								.detail("TagID", self->tag.id)
-								.detail("Saved", self->savedVersion)
-								.log();
+							// TraceEvent("Hfu5TaskVersion")
+							// 	.detail("V", vv)
+							// 	.detail("TagID", self->tag.id)
+							// 	.detail("Saved", self->savedVersion)
+							// 	.log();
 							self->savedVersion = std::max(self->savedVersion, vv);
 						}
 					}
@@ -627,6 +627,7 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 
 	loop {
 		try {
+			TraceEvent("Hfu51111111").log();
 			tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 			tr->setOption(FDBTransactionOptions::LOCK_AWARE);
 			tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
@@ -637,14 +638,17 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 			for (const auto& [uid, version] : savedLogVersions) {
 				versionConfigs.emplace_back(uid);
 				prevVersions.push_back(versionConfigs.back().latestBackupWorkerSavedVersion().get(tr));
+				// hfu5: it seems to fail here, tuple cannot be read
 				allWorkersReady.push_back(versionConfigs.back().allWorkerStarted().get(tr));
 			}
 
 			wait(waitForAll(prevVersions) && waitForAll(allWorkersReady));
+			TraceEvent("Hfu522222222").log();
 
 			for (int i = 0; i < prevVersions.size(); i++) {
 				if (!allWorkersReady[i].get().present()) {
 					// hfu5, to verify the value
+					TraceEvent("Hfu5PrintAllWorkersReady").detail("Key", allWorkersReady[i].get().get()).log();
 					continue;
 				}
 				const Version current = savedLogVersions[versionConfigs[i].getUid()];
@@ -663,6 +667,7 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 					    .detail("Version", current);
 					versionConfigs[i].latestBackupWorkerSavedVersion().set(tr, current);
 				}
+				TraceEvent("Hfu53333333333").log();
 			}
 			wait(tr->commit());
 			return Void();

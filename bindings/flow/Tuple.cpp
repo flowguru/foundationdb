@@ -122,6 +122,7 @@ Tuple::Tuple(StringRef const& str) {
 		} else if (data[i] == VERSIONSTAMP_96_CODE) {
 			i += 1 + VERSIONSTAMP_TUPLE_SIZE;
 		} else {
+			TraceEvent("Hfu5InvalidTupleType").detail("Type", data[i]).log();
 			throw invalid_tuple_data_type();
 		}
 	}

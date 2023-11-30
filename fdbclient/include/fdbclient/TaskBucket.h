@@ -168,7 +168,6 @@ public:
 		Future<bool> valid = isVerified(tr, task);
 		return map(success(finished) && success(valid), [=](Void) {
 			if (finished.get() || !valid.get()) {
-				// hfu5 : now it fails here
 				TraceEvent("Hfu5KeepRunningInterrupted").log();
 				throw task_interrupted();
 			}
