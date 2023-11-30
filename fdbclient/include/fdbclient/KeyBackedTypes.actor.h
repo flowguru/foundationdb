@@ -106,6 +106,9 @@ inline bool TupleCodec<bool>::unpack(Standalone<StringRef> const& val) {
 	return Tuple::unpack(val).getInt(0) == 1;
 }
 
+// hfu5: this is not symmetric: when pack, stringref can be encoded as is(makeTuple)
+// but when unpack, it always expects the tuple to be good formatted.
+// as a result, i have to find a way to change the data to the correct format after Set
 template <>
 inline Standalone<StringRef> TupleCodec<Standalone<StringRef>>::pack(Standalone<StringRef> const& val) {
 	return Tuple::makeTuple(val).pack();
@@ -383,6 +386,8 @@ public:
 		}
 	}
 
+	// TODO: add another method to get key and value as is, rather than through codec
+
 	// Get property's value or defaultValue if it doesn't exist
 	template <class Transaction>
 	Future<T> getD(Transaction tr, Snapshot snapshot = Snapshot::False, T defaultValue = T()) const {
@@ -527,6 +532,8 @@ public:
 		}
 	}
 
+	// hfu5: can i use this method? but all instantiation of KeyBackedBinaryValue is int64
+	// how can can we just append StringRef(reinterpret_cast<uint8_t*>(&offset), 4)?
 	template <class Transaction>
 	void setVersionstamp(Transaction tr, T const& val, int offset) {
 		tr->atomicOp(

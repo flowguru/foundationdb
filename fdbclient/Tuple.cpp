@@ -67,6 +67,8 @@ Tuple::Tuple(StringRef const& str, bool exclude_incomplete, bool include_user_ty
 	size_t i = 0;
 	while (i < data.size()) {
 		offsets.push_back(i);
+		uint8_t ii = data[i];
+		// TraceEvent("Hfu5Tuple").detail("I", i).detail("Data", ii).log();
 
 		if (data[i] == '\x01' || data[i] == '\x02') {
 			i = findStringTerminator(str, i + 1) + 1;
@@ -86,6 +88,11 @@ Tuple::Tuple(StringRef const& str, bool exclude_incomplete, bool include_user_ty
 			// User defined codes must come at the end of a Tuple and are not delimited.
 			i = data.size();
 		} else {
+			TraceEvent("Hfu5InvalidTupleType33333333")
+				.detail("StrLen", str.size())
+				.detail("DataLen", data.size())
+				.detail("I", i)
+				.detail("Data", ii).log();
 			throw invalid_tuple_data_type();
 		}
 	}

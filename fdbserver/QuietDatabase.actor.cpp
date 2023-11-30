@@ -1088,10 +1088,10 @@ ACTOR Future<Void> waitForQuietDatabase(Database cx,
 
 			std::string evtType = "QuietDatabase" + phase;
 			if (tLogQueueInfo.get().second > maxPoppedVersionLag) {
-				TraceEvent("Hfu5MaxTLogPopVersionLag")
-				    .detail("Value", tLogQueueInfo.get().second)
-				    .detail("Threshold", maxPoppedVersionLag)
-				    .log();
+				// TraceEvent("Hfu5MaxTLogPopVersionLag")
+				//     .detail("Value", tLogQueueInfo.get().second)
+				//     .detail("Threshold", maxPoppedVersionLag)
+				//     .log();
 			}
 			TraceEvent evt(evtType.c_str());
 			check.add(evt, "DataInFlight", dataInFlight.get(), dataInFlightGate)

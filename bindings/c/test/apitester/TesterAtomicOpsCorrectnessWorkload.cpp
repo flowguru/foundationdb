@@ -215,7 +215,6 @@ private:
 		    });
 	}
 
-	// hfu5: here is an example. it seems if we set versionstamped key, then it will be filled
 	void testAtomicVersionstampedKeyOp(TTaskFct cont) {
 		Key keyPrefix(randomKeyName());
 		Key key = keyPrefix + fdb::ByteString(10, '\0') + toByteString((uint32_t)keyPrefix.size());

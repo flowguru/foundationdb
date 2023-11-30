@@ -3452,12 +3452,12 @@ struct StartFullBackupTaskFunc : BackupTaskFuncBase {
 					watchFuture = tr->watch(config.allWorkerStarted().key);
 				}
 
-				TraceEvent("Hfu5FileBackupAgentBlocking").log();
+				// TraceEvent("Hfu5FileBackupAgentBlocking").log();
 				wait(keepRunning);
 				wait(tr->commit());
 				if (!taskStarted.get().present()) {
 					wait(watchFuture);
-					TraceEvent("Hfu5FileBackupAgentUnblocked").log();
+					// TraceEvent("Hfu5FileBackupAgentUnblocked").log();
 					// tr->reset();
 					// tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 					// tr->setOption(FDBTransactionOptions::LOCK_AWARE);

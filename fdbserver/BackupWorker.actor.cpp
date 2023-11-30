@@ -474,13 +474,13 @@ struct BackupData {
 			// is already popped. Advance the version is safe because these
 			// versions are not popped -- if they are popped, their progress should
 			// be already recorded and Master would use a higher version than minVersion.
-			TraceEvent("Hfu5ChangeSavedVersion")
-				.detail("BcakupEpoch", backupEpoch)
-				.detail("RecruitedEpoch", recruitedEpoch)
-				.detail("SavedVersion", savedVersion)
-				.detail("MinVersion", minVersion)
-				.detail("StartVersion", startVersion)
-				.log();
+			// TraceEvent("Hfu5ChangeSavedVersion")
+			// 	.detail("BcakupEpoch", backupEpoch)
+			// 	.detail("RecruitedEpoch", recruitedEpoch)
+			// 	.detail("SavedVersion", savedVersion)
+			// 	.detail("MinVersion", minVersion)
+			// 	.detail("StartVersion", startVersion)
+			// 	.log();
 			savedVersion = std::max(minVersion, savedVersion);
 		}
 		if (modified)
@@ -565,7 +565,6 @@ ACTOR Future<bool> monitorBackupStartedKeyChanges(BackupData* self, bool present
 				state int i = 0;
 				if (value.present()) {
 					uidVersions = decodeBackupStartedValue(value.get());
-					// hfu5: backupStarted Key is read here
 					state TraceEvent e("BackupWorkerGotStartKey", self->myId);
 					for (auto [uid, version] : uidVersions) {
 						state UID uuid = uid;
@@ -597,7 +596,6 @@ ACTOR Future<bool> monitorBackupStartedKeyChanges(BackupData* self, bool present
 					}
 					self->exitEarly = shouldExit;
 					self->onBackupChanges(uidVersions);
-					// hfu5: it returns when backupStarted key is set
 					if (present || !watch)
 						return true;
 				} else {
@@ -627,7 +625,7 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 
 	loop {
 		try {
-			TraceEvent("Hfu51111111").log();
+			// TraceEvent("Hfu51111111").log();
 			tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 			tr->setOption(FDBTransactionOptions::LOCK_AWARE);
 			tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
@@ -639,6 +637,7 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 				versionConfigs.emplace_back(uid);
 				prevVersions.push_back(versionConfigs.back().latestBackupWorkerSavedVersion().get(tr));
 				// hfu5: it seems to fail here, tuple cannot be read
+				// hfu5 : or to not use this BackupConfig as a reader/writer
 				allWorkersReady.push_back(versionConfigs.back().allWorkerStarted().get(tr));
 			}
 
@@ -667,7 +666,6 @@ ACTOR Future<Void> setBackupKeys(BackupData* self, std::map<UID, Version> savedL
 					    .detail("Version", current);
 					versionConfigs[i].latestBackupWorkerSavedVersion().set(tr, current);
 				}
-				TraceEvent("Hfu53333333333").log();
 			}
 			wait(tr->commit());
 			return Void();
