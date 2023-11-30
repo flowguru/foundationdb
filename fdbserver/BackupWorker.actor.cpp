@@ -242,8 +242,6 @@ struct BackupData {
 							tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 							tr->setOption(FDBTransactionOptions::LOCK_AWARE);
 							tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
-							// Key placeHolder = "0123456789\x00\x00\x00\x00"_sr;
-							// config.allWorkerStarted().setVersionstamp(tr, placeHolder, 0);
 							config.allWorkerStarted().setVersionstamp(tr, Versionstamp(), 0);
 							state Future<Standalone<StringRef>> fTrVs = tr->getVersionstamp();
 							wait(tr->commit());

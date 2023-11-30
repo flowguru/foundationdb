@@ -3369,6 +3369,7 @@ struct StartFullBackupTaskFunc : BackupTaskFuncBase {
 
 		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(cx));
 		state BackupConfig config(task);
+		state bool allWorkerStarted = false;
 		state Future<Optional<bool>> partitionedLog;
 		loop {
 			try {
@@ -3410,12 +3411,33 @@ struct StartFullBackupTaskFunc : BackupTaskFuncBase {
 		}
 
 		// Set the "backupStartedKey" and wait for all backup worker started
-		tr->reset();
 		loop {
 			state Future<Void> watchFuture;
 			try {
+				tr->reset();
 				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 				tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+				if (allWorkerStarted) {
+					Optional<Value> commitVersion = wait(tr->get(config.allWorkerStarted().key));
+					TraceEvent("Hfu5EnterLoop").detail("CommitVersionPresent", commitVersion.present()).log();
+					if (!commitVersion.present()) {
+						throw backup_error();
+					}
+					Value v = commitVersion.get();
+					TraceEvent("Hfu5CommitVersion").detail("V", v).log();
+					// transform from StringRef to Version, then set it
+					int64_t vv = 0;
+					// only take the first 8 bytes, although its 10 bytes, not sure why, maybe its truncated
+					for (int j = 0; j < 8; j++) {
+						uint8_t n = v[j];
+						vv *= 256;
+						vv += n;
+					}
+					TraceEvent("Hfu5CommitVersion2222").detail("VV", vv).log();
+					Params.beginVersion().set(task, vv);
+					return Void();
+				}
+				
 				state Future<Void> keepRunning = taskBucket->keepRunning(tr, task);
 
 				state Future<Optional<Value>> started = tr->get(backupStartedKey);
@@ -3452,12 +3474,14 @@ struct StartFullBackupTaskFunc : BackupTaskFuncBase {
 					watchFuture = tr->watch(config.allWorkerStarted().key);
 				}
 
-				// TraceEvent("Hfu5FileBackupAgentBlocking").log();
+				TraceEvent("Hfu5FileBackupAgentBlocking").log();
 				wait(keepRunning);
 				wait(tr->commit());
 				if (!taskStarted.get().present()) {
 					wait(watchFuture);
-					// TraceEvent("Hfu5FileBackupAgentUnblocked").log();
+					allWorkerStarted = true;
+					TraceEvent("Hfu5FileBackupAgentUnblocked").log();
+					continue;
 					// tr->reset();
 					// tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 					// tr->setOption(FDBTransactionOptions::LOCK_AWARE);
