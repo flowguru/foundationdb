@@ -258,19 +258,39 @@ public:
 		ASSERT(tags == nullptr || tags->empty());
 		for (int idx : indices) {
 			const LogFile& file = files[idx];
+			TraceEvent("Hfu5EachFile")
+				.detail("FileBegin", file.beginVersion)
+				.detail("FileEnd", file.endVersion)
+				.detail("LastBegin", lastBegin)
+				.detail("LastEnd", lastEnd)
+				.log();
 			if (lastEnd == invalidVersion) {
-				if (file.beginVersion > begin)
+				if (file.beginVersion > begin) {
+					TraceEvent("Hfu5Continuous11111")
+						.detail("FileBeginVersion", file.beginVersion)
+						.detail("Begin", begin)
+						.log();
 					return false;
+				}
 				if (file.endVersion > begin) {
+					// find the first file whose end version is larger than begin
+					// and then set
 					lastBegin = begin;
 					lastTags = file.totalTags;
 				} else {
 					continue;
 				}
 			} else if (lastEnd < file.beginVersion) {
+				// if lastEnd != invalidVersion, meaning this is not the first file
+				// if last file's end is smaller than this file's begin, it means there
+				// is a gap between 2 files so that the versions in [begin, end] has a gap in the files.
 				if (tags != nullptr) {
 					tags->emplace(std::make_pair(lastBegin, lastEnd - 1), lastTags);
 				}
+				TraceEvent("Hfu5Continuous222222")
+						.detail("FileBeginVersion", file.beginVersion)
+						.detail("LastEnd", lastEnd)
+						.log();
 				return false;
 			}
 
@@ -287,6 +307,13 @@ public:
 		}
 		if (tags != nullptr && lastBegin != invalidVersion) {
 			tags->emplace(std::make_pair(lastBegin, std::min(end, lastEnd - 1)), lastTags);
+		}
+		if (!(lastBegin != invalidVersion && lastEnd > end)) {
+			TraceEvent("Hfu5Continuous33333")
+				.detail("LastBegin", lastBegin)
+				.detail("LastEnd", lastEnd)
+				.detail("End", end)
+				.log();
 		}
 		return lastBegin != invalidVersion && lastEnd > end;
 	}
@@ -835,6 +862,8 @@ public:
 	// "files" should be pre-sorted according to version order.
 	static bool isPartitionedLogsContinuous(const std::vector<LogFile>& files, Version begin, Version end) {
 		std::map<int, std::vector<int>> tagIndices; // tagId -> indices in files
+		// hfu5 : each file has a tagId
+		// tagIndices map from tagID, to all the file[x] with tagID
 		for (int i = 0; i < files.size(); i++) {
 			ASSERT(files[i].tagId >= 0 && files[i].tagId < files[i].totalTags);
 			auto& indices = tagIndices[files[i].tagId];
@@ -853,10 +882,24 @@ public:
 
 		// for each range in tags, check all tags from 1 are continouous
 		for (const auto& [beginEnd, count] : tags) {
+			// count is the total numebr of tags, tag starts at 0
+			TraceEvent("Hfu5Tag")
+				.detail("Begin", beginEnd.first)
+				.detail("End", beginEnd.second)
+				.detail("Count", count)
+				.log();
 			for (int i = 1; i < count; i++) {
+				// for each tag, check if they are continuous
+				TraceEvent("Hfu5TagCount")
+					.detail("Begin", beginEnd.first)
+					.detail("End", beginEnd.second)
+					.detail("Count", count)
+					.detail("I", i)
+					.log();
 				if (!isContinuous(files, tagIndices[i], beginEnd.first, std::min(beginEnd.second - 1, end), nullptr)) {
 					TraceEvent(SevWarn, "BackupFileNotContinuous")
 					    .detail("Partition", i)
+						.detail("End", end)
 					    .detail("RangeBegin", beginEnd.first)
 					    .detail("RangeEnd", beginEnd.second);
 					return false;
@@ -916,6 +959,12 @@ public:
 	                                                               VectorRef<KeyRangeRef> keyRangesFilter,
 	                                                               bool logsOnly = false,
 	                                                               Version beginVersion = invalidVersion) {
+		// hfu5: debug here
+		TraceEvent("Hfu5RestoreSetBegin")
+			.detail("FilterSize", keyRangesFilter.size())
+			.detail("BeginVersion", beginVersion)
+			.detail("TargetVersion", targetVersion)
+			.log();
 		for (const auto& range : keyRangesFilter) {
 			TraceEvent("BackupContainerGetRestoreSet").detail("RangeFilter", printable(range));
 		}
@@ -935,8 +984,16 @@ public:
 
 		// Find the most recent keyrange snapshot through which we can restore filtered key ranges into targetVersion.
 		state std::vector<KeyspaceSnapshotFile> snapshots = wait(bc->listKeyspaceSnapshots());
+		TraceEvent("Hfu5RestoreSnapshot")
+			.detail("SnapShotSize", snapshots.size())
+			.log();
 		state int i = snapshots.size() - 1;
 		for (; i >= 0; i--) {
+			TraceEvent("Hfu5RestoreEachSnapshot")
+				.detail("II", i)
+				.detail("SnapShotBeginVersion", snapshots[i].beginVersion)
+				.detail("TargetVersion", targetVersion)
+				.log();
 			// The smallest version of filtered range files >= snapshot beginVersion > targetVersion
 			if (targetVersion >= 0 && snapshots[i].beginVersion > targetVersion) {
 				continue;
@@ -974,6 +1031,11 @@ public:
 			// 'latestVersion' represents using the minimum restorable version in a snapshot.
 			restorable.targetVersion = targetVersion == latestVersion ? maxKeyRangeVersion : targetVersion;
 			// Any version < maxKeyRangeVersion is not restorable.
+			TraceEvent("Hfu5RestoreVersion")
+				.detail("Restorable", restorable.targetVersion)
+				.detail("MaxKeyRangeVersion", maxKeyRangeVersion)
+				.detail("MinKeyRangeVersion", minKeyRangeVersion)
+				.log();
 			if (restorable.targetVersion < maxKeyRangeVersion)
 				continue;
 
@@ -994,7 +1056,9 @@ public:
 			state std::vector<LogFile> plogs;
 			wait(store(logs, bc->listLogFiles(minKeyRangeVersion, restorable.targetVersion, false)) &&
 			     store(plogs, bc->listLogFiles(minKeyRangeVersion, restorable.targetVersion, true)));
-
+			TraceEvent("Hfu5RestorePlog")
+				.detail("Size", plogs.size())
+				.log();
 			if (plogs.size() > 0) {
 				logs.swap(plogs);
 				// sort by tag ID so that filterDuplicates works.
@@ -1002,9 +1066,12 @@ public:
 					return std::tie(a.tagId, a.beginVersion, a.endVersion) <
 					       std::tie(b.tagId, b.beginVersion, b.endVersion);
 				});
-
+		
 				// Remove duplicated log files that can happen for old epochs.
 				std::vector<LogFile> filtered = filterDuplicates(logs);
+				TraceEvent("Hfu5RestoreFiltered")
+					.detail("Size", filtered.size())
+					.log();
 				restorable.logs.swap(filtered);
 				// sort by version order again for continuous analysis
 				std::sort(restorable.logs.begin(), restorable.logs.end());
@@ -1013,6 +1080,8 @@ public:
 					restorable.continuousEndVersion = restorable.targetVersion + 1; // not inclusive
 					return Optional<RestorableFileSet>(restorable);
 				}
+				TraceEvent("Hfu5RestoreSetEmpty1")
+					.log();
 				return Optional<RestorableFileSet>();
 			}
 
@@ -1024,6 +1093,8 @@ public:
 				return getRestoreSetFromLogs(logs, targetVersion, restorable);
 			}
 		}
+		TraceEvent("Hfu5RestoreSetEmpty2")
+			.log();
 		return Optional<RestorableFileSet>();
 	}
 

@@ -550,6 +550,7 @@ struct BackupAndParallelRestoreCorrectnessWorkload : TestWorkload {
 					}
 				}
 
+				// hfu5 : here it breaks
 				TraceEvent("BAFRW_Restore", randomID)
 				    .detail("LastBackupContainer", lastBackupContainer->getURL())
 				    .detail("MinRestorableVersion", desc.minRestorableVersion.get())

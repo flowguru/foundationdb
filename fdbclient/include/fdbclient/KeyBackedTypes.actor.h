@@ -386,8 +386,6 @@ public:
 		}
 	}
 
-	// TODO: add another method to get key and value as is, rather than through codec
-
 	// Get property's value or defaultValue if it doesn't exist
 	template <class Transaction>
 	Future<T> getD(Transaction tr, Snapshot snapshot = Snapshot::False, T defaultValue = T()) const {
@@ -424,28 +422,6 @@ public:
 
 				return val.get();
 			});
-		}
-	}
-
-	template <class TransactionContext>
-	std::enable_if_t<is_transaction_creator<TransactionContext>, Future<Void>> atomicOp(TransactionContext tcx, 
-			T const& val, MutationRef::Type type) {
-		// MutationRef::SetVersionstampedValue
-		return runTransaction(tcx, [this, val, type](decltype(tcx->createTransaction()) tr) {
-			if constexpr (SystemAccess) {
-				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
-			}
-			tr->setOption(FDBTransactionOptions::LOCK_AWARE);
-			atomicOp(tr, val, type);
-			return Future<Void>(Void());
-		});
-	}
-
-	template <class Transaction>
-	std::enable_if_t<!is_transaction_creator<Transaction>, void> atomicOp(Transaction tr, T const& val, MutationRef::Type type) {
-		tr->atomicOp(key, val, type);
-		if (trigger.present()) {
-			trigger->update(tr);
 		}
 	}
 

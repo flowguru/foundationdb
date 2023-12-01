@@ -1043,16 +1043,16 @@ ACTOR Future<Void> pullAsyncData(BackupData* self) {
 		}
 
 		// It's data loss issue if popped() > 0. It means mutations between popped() and tagAt are not available
-		if (r->popped() > 0) {
-			TraceEvent(SevWarn, "BackupWorkerPullMissingMutations", self->myId)
-			    .detail("Tag", self->tag)
-			    .detail("Start", self->startVersion)
-			    .detail("Saved", self->savedVersion)
-			    .detail("BackupEpoch", self->backupEpoch)
-			    .detail("Popped", r->popped())
-			    .detail("ExpectedPeekVersion", tagAt);
-			throw worker_removed();
-		}
+		// if (r->popped() > 0) {
+		// 	TraceEvent(SevWarn, "BackupWorkerPullMissingMutations", self->myId)
+		// 	    .detail("Tag", self->tag)
+		// 	    .detail("Start", self->startVersion)
+		// 	    .detail("Saved", self->savedVersion)
+		// 	    .detail("BackupEpoch", self->backupEpoch)
+		// 	    .detail("Popped", r->popped())
+		// 	    .detail("ExpectedPeekVersion", tagAt);
+		// 	throw worker_removed();
+		// }
 		self->minKnownCommittedVersion = std::max(self->minKnownCommittedVersion, r->getMinKnownCommittedVersion());
 
 		// Note we aggressively peek (uncommitted) messages, but only committed
