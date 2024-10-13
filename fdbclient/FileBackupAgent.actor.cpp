@@ -4143,6 +4143,7 @@ bool RangeMapFilters::match(const KeyRangeRef& range) const {
 std::vector<KeyValueRef> filterLogMutationKVPairs(VectorRef<KeyValueRef> data, const RangeMapFilters& filters) {
 	std::unordered_map<Version, AccumulatedMutations> mutationBlocksByVersion;
 
+	// first group mutations by version
 	for (auto& kv : data) {
 		auto versionAndChunkNumber = decodeMutationLogKey(kv.key);
 		mutationBlocksByVersion[versionAndChunkNumber.first].addChunk(versionAndChunkNumber.second, kv);
@@ -4150,6 +4151,8 @@ std::vector<KeyValueRef> filterLogMutationKVPairs(VectorRef<KeyValueRef> data, c
 
 	std::vector<KeyValueRef> output;
 
+	// then add each version to the output, and now each K in output is also a KeyValueRef, 
+	// but mutations of the same versions stay together
 	for (auto& vb : mutationBlocksByVersion) {
 		AccumulatedMutations& m = vb.second;
 
@@ -4214,6 +4217,20 @@ struct RestoreLogDataTaskFunc : RestoreFileTaskFuncBase {
 		}
 
 		state Key mutationLogPrefix = restore.mutationLogPrefix();
+		// hfu5 proposal: instead of reading a single file, read a certain range across all files
+		// question: do we need to provide a start version? where do we start?
+		// we might need to find the oldest range file v_oldest_range
+		// and scan all log files starting from that version
+		// we can support specifying a key range in the future.
+		// version = getOldestRangeFileVersion();
+		// while (version < end_version) { 
+		//      // to provide getMutationsForNextVersion, the bc has to store the current version and offset for each tag file
+		// 		version = getMutationsForNextVersion(version, mutations); 
+		//      // concatenate mutations, if larger than block_size then split them into partitions just like old format
+		//      // write mutation in old backup format in a transaction
+		//      // (i.e. applyLogKeys.begin/backupUid/hash(uint8)/version(64bites)/part)
+		//      mutations.clear();
+		// }
 		state Reference<IAsyncFile> inFile = wait(bc->readFile(logFile.fileName));
 		state Standalone<VectorRef<KeyValueRef>> dataOriginal =
 		    wait(decodeMutationLogFileBlock(inFile, readOffset, readLen));
@@ -4241,7 +4258,7 @@ struct RestoreLogDataTaskFunc : RestoreFileTaskFuncBase {
 				state int txBytes = 0;
 				for (; i < end && txBytes < dataSizeLimit; ++i) {
 					Key k = dataFiltered[i].key.withPrefix(mutationLogPrefix);
-					ValueRef v = dataFiltered[i].value;
+					ValueRef v = dataFiltered[i].value; // each KV is a [param1 with added prefix -> param2]
 					tr->set(k, v);
 					txBytes += k.expectedSize();
 					txBytes += v.expectedSize();
@@ -4508,6 +4525,7 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 		state int64_t beginBlock = Params.beginBlock().getOrDefault(task);
 		state int i = 0;
 
+		// for each file
 		for (; i < files.results.size(); ++i) {
 			RestoreConfig::RestoreFile& f = files.results[i];
 

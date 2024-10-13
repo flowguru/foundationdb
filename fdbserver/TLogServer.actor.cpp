@@ -2438,6 +2438,7 @@ ACTOR Future<Void> tLogCommit(TLogData* self,
 	if (req.debugID.present())
 		g_traceBatch.addEvent("CommitDebug", tlogDebugID.get().first(), "TLog.tLogCommit.After");
 
+	// hfu5: find 
 	req.reply.send(logData->durableKnownCommittedVersion);
 
 	// Measure server-side RPC latency from the time a request was
