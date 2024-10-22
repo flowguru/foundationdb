@@ -798,8 +798,6 @@ ACTOR Future<int> kvMutationLogToTransactions(Database cx,
 				}
 				// Parse a single transaction from the backup mutation log
 				Standalone<StringRef> value = bw.toValue();
-				// hfu5: question: why value here is a Param2, when it is created via a for loop adding each element of the value
-				// i.e. who writes the length_of_the_mutation_group? 
 				// ref: https://github.com/apple/foundationdb/blob/release-6.2/design/backup-dataFormat.md
 				wait(decodeBackupLogValue(&curReq.arena,
 				                          &curReq.transaction.mutations,

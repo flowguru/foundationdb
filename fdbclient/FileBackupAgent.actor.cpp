@@ -232,8 +232,9 @@ public:
 
 	// Describes a file to load blocks from during restore.  Ordered by version and then fileName to enable
 	// incrementally advancing through the map, saving the version and path of the next starting point.
+	// question: do we want to add tag here?
 	struct RestoreFile {
-		Version version;
+		Version version; // this is beginVersion, not endVersion
 		std::string fileName;
 		bool isRange{ false }; // false for log file
 		int64_t blockSize{ 0 };
@@ -1368,6 +1369,8 @@ private:
 	int64_t blockEnd;
 };
 
+// input: a string of [param1, param2], [param1, param2] ..., [param1, param2]
+// output: a vector of [param1, param2] after removing the length info
 Standalone<VectorRef<KeyValueRef>> decodeMutationLogFileBlock(const Standalone<StringRef>& buf) {
 	Standalone<VectorRef<KeyValueRef>> results({}, buf.arena());
 	StringRefReader reader(buf, restore_corrupted_data());
@@ -1640,6 +1643,7 @@ ACTOR static Future<Key> addBackupTask(StringRef name,
 	state Reference<Task> task(new Task(name, version, doneKey, priority));
 
 	// Bind backup config to new task
+	// allow this new task to find the config(keyspace) of the parent task
 	wait(config.toTask(tr, task, setValidation));
 
 	// Set task specific params
@@ -4061,7 +4065,8 @@ std::vector<MutationRef> decodeMutationLogValue(const StringRef& value) {
 }
 
 void AccumulatedMutations::addChunk(int chunkNumber, const KeyValueRef& kv) {
-	if (chunkNumber == lastChunkNumber + 1) {
+	// hfu5[important] : here it validates that partition(chunk) number has to be continuous
+ 	if (chunkNumber == lastChunkNumber + 1) {
 		lastChunkNumber = chunkNumber;
 		serializedMutations += kv.value.toString();
 	} else {
@@ -4091,6 +4096,7 @@ bool AccumulatedMutations::isComplete() const {
 // range in ranges.
 // It is undefined behavior to run this if isComplete() does not return true.
 bool AccumulatedMutations::matchesAnyRange(const RangeMapFilters& filters) const {
+	// decode param2, so that each actual mutations are in mutations variable
 	std::vector<MutationRef> mutations = decodeMutationLogValue(serializedMutations);
 	for (auto& m : mutations) {
 		if (m.type == MutationRef::Encrypted) {
@@ -4157,6 +4163,7 @@ std::vector<KeyValueRef> filterLogMutationKVPairs(VectorRef<KeyValueRef> data, c
 		AccumulatedMutations& m = vb.second;
 
 		// If the mutations are incomplete or match one of the ranges, include in results.
+		// hfu5: incomplete, why?
 		if (!m.isComplete() || m.matchesAnyRange(filters)) {
 			output.insert(output.end(), m.kvs.begin(), m.kvs.end());
 		}
@@ -4195,7 +4202,7 @@ struct RestoreLogDataTaskFunc : RestoreFileTaskFuncBase {
 
 		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(cx));
 		state Reference<IBackupContainer> bc;
-		state std::vector<KeyRange> ranges;
+		state std::vector<KeyRange> ranges; // this is the actual KV, not version
 
 		loop {
 			try {
@@ -4330,6 +4337,7 @@ struct RestoreLogDataTaskFunc : RestoreFileTaskFuncBase {
 		state Reference<Task> task(new Task(RestoreLogDataTaskFunc::name, RestoreLogDataTaskFunc::version, doneKey));
 
 		// Create a restore config from the current task and bind it to the new task.
+		// RestoreConfig(parentTask) createsa prefix of : fileRestorePrefixRange.begin/uid->config/[uid]
 		wait(RestoreConfig(parentTask).toTask(tr, task));
 		Params.inputFile().set(task, lf);
 		Params.readOffset().set(task, offset);
@@ -4384,6 +4392,7 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 		state int64_t remainingInBatch = Params.remainingInBatch().get(task);
 		state bool addingToExistingBatch = remainingInBatch > 0;
 		state Version restoreVersion;
+		// is onlyApplyMutationLogs useful?
 		state Future<Optional<bool>> onlyApplyMutationLogs = restore.onlyApplyMutationLogs().get(tr);
 
 		wait(store(restoreVersion, restore.restoreVersion().getOrThrow(tr)) && success(onlyApplyMutationLogs) &&
@@ -4393,6 +4402,9 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 		// previous batch can be applied.  Only do this once beginVersion is > 0 (it will be 0 for the initial
 		// dispatch).
 		if (!addingToExistingBatch && beginVersion > 0) {
+			// hfu5 : unblock apply alog to normal key space
+			// if the last file is [80, 100] and the restoreVersion is 90, we should use 90 here
+			// this call an additional call after last file
 			restore.setApplyEndVersion(tr, std::min(beginVersion, restoreVersion + 1));
 		}
 
@@ -4419,6 +4431,7 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 			return Void();
 		}
 
+		// question why do we need beginFile at all
 		state std::string beginFile = Params.beginFile().getOrDefault(task);
 		// Get a batch of files.  We're targeting batchSize blocks being dispatched so query for batchSize files
 		// (each of which is 0 or more blocks).
@@ -4470,6 +4483,7 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 				    .detail("TaskInstance", THIS_ADDR);
 			} else if (beginVersion < restoreVersion) {
 				// If beginVersion is less than restoreVersion then do one more dispatch task to get there
+				// there are no more files between beginVersion and restoreVersion
 				wait(success(RestoreDispatchTaskFunc::addTask(tr, taskBucket, task, restoreVersion, "", 0, batchSize)));
 
 				TraceEvent("FileRestoreDispatch")
@@ -4496,6 +4510,7 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 			} else {
 				// Applying of mutations is not yet finished so wait a small amount of time and then re-add this
 				// same task.
+				// this is only to create a dummy one wait for it to finish
 				wait(delay(FLOW_KNOBS->PREVENT_FAST_SPIN_DELAY));
 				wait(success(RestoreDispatchTaskFunc::addTask(tr, taskBucket, task, beginVersion, "", 0, batchSize)));
 
@@ -4526,8 +4541,14 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 		state int i = 0;
 
 		// for each file
+		// not creating a new task at this level because restore files are read back together -- both range and log
+		// so i have to process range files anyway.
 		for (; i < files.results.size(); ++i) {
 			RestoreConfig::RestoreFile& f = files.results[i];
+			// if (!f.isRange && plog) {
+			// 	// process plog elsewhere
+			// 	continue;
+			// }
 
 			// Here we are "between versions" (prior to adding the first block of the first file of a new version)
 			// so this is an opportunity to end the current dispatch batch (which must end on a version boundary) if
@@ -4535,7 +4556,15 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 			if (f.version != endVersion && remainingInBatch <= 0) {
 				// Next start will be at the first version after endVersion at the first file first block
 				++endVersion;
-				beginFile = "";
+				// beginFile set to empty to indicate we are not in the middle of a range
+				// by middle of a range, we mean that we have rangeFile v=80, and logFile v=[80, 100], 
+				// then we have to include this log file too in this batch
+
+				// if range comes first, say range=80, log=(81, 100), then its fine we stop before the log,
+				// what if log comes first:
+				// range=80, log=(60,90), and range should not be read, but 
+				// what about the 80-90 part? we should not allow those to commit
+				beginFile = ""; 
 				beginBlock = 0;
 				break;
 			}
@@ -4592,6 +4621,17 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 			    .detail("FileName", f.fileName)
 			    .detail("TaskInstance", THIS_ADDR);
 		}
+		// if (plog) {
+		// 	int logIndex = 0;
+		// 	for (; logIndex < files.results.size(); ++logIndex) {
+		// 		RestoreConfig::RestoreFile& f = files.results[i];
+		// 		if (f.isRange) {
+		// 			// only process plog here
+		// 			continue;
+		// 		}
+				
+		// 	}
+		// }
 
 		// If no blocks were dispatched then the next dispatch task should run now and be joined with the
 		// allPartsDone future
@@ -4644,8 +4684,12 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 		// If beginFile is not empty then we had to stop in the middle of a version (possibly within a file) so we
 		// cannot end the batch here because we do not know if we got all of the files and blocks from the last
 		// version queued, so make sure remainingInBatch is at least 1.
-		if (!beginFile.empty())
+		if (!beginFile.empty()) {
+			// this is to make sure if we stop in the middle of a version, we do not end this batch
+			// instead next RestoreDispatchTaskFunc should have addingToExistingBatch as true
+			// thus they are considered the same batch and alog will be committed only when all of them succeed
 			remainingInBatch = std::max<int64_t>(1, remainingInBatch);
+		}
 
 		// If more blocks need to be dispatched in this batch then add a follow-on task that is part of the
 		// allPartsDone group which will won't wait to run and will add more block tasks.
@@ -4924,6 +4968,7 @@ struct StartFullRestoreTaskFunc : RestoreTaskFuncBase {
 		for (auto const& r : ranges) {
 			keyRangesFilter.push_back_deep(keyRangesFilter.arena(), KeyRangeRef(r));
 		}
+		// hfu5 : log files are read from here
 		state Optional<RestorableFileSet> restorable =
 		    wait(bc->getRestoreSet(restoreVersion, keyRangesFilter, logsOnly, beginVersion));
 		if (!restorable.present())
@@ -4944,6 +4989,7 @@ struct StartFullRestoreTaskFunc : RestoreTaskFuncBase {
 			} else {
 				for (int i = 0; i < restorable.get().ranges.size(); ++i) {
 					const RangeFile& f = restorable.get().ranges[i];
+					// hfu5: insert range files first
 					files.push_back({ f.version, f.fileName, true, f.blockSize, f.fileSize });
 					// In inconsistentSnapshotOnly mode, if all range files have the same version, then it is the
 					// firstConsistentVersion, otherwise unknown (use -1).
@@ -4960,7 +5006,8 @@ struct StartFullRestoreTaskFunc : RestoreTaskFuncBase {
 		}
 		if (!inconsistentSnapshotOnly) {
 			for (const LogFile& f : restorable.get().logs) {
-				files.push_back({ f.beginVersion, f.fileName, false, f.blockSize, f.fileSize, f.endVersion });
+				// hfu5: log files are added to files here
+				files.push_back({ f.beginVersion, f.fileName, false, f.blockSize, f.fileSize, f.endVersion});
 			}
 		}
 		// First version for which log data should be applied
@@ -4996,8 +5043,10 @@ struct StartFullRestoreTaskFunc : RestoreTaskFuncBase {
 				state int nFileBlocks = 0;
 				state int nFiles = 0;
 				auto fileSet = restore.fileSet();
+				// as a result, fileSet has everything, including [beginVersion, endVersion] for each tag
 				for (; i != end && txBytes < 1e6; ++i) {
 					txBytes += fileSet.insert(tr, *i);
+					// handle the remaining
 					nFileBlocks += (i->fileSize + i->blockSize - 1) / i->blockSize;
 					++nFiles;
 				}

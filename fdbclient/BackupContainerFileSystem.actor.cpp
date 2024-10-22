@@ -993,6 +993,7 @@ public:
 			     store(plogs, bc->listLogFiles(minKeyRangeVersion, restorable.targetVersion, true)));
 
 			if (plogs.size() > 0) {
+				// hfu5 : this is how files are decided
 				logs.swap(plogs);
 				// sort by tag ID so that filterDuplicates works.
 				std::sort(logs.begin(), logs.end(), [](const LogFile& a, const LogFile& b) {
@@ -1005,6 +1006,7 @@ public:
 				restorable.logs.swap(filtered);
 				// sort by version order again for continuous analysis
 				std::sort(restorable.logs.begin(), restorable.logs.end());
+				// sort by version, but isPartitionedLogsContinuous will sort each tag separately
 				if (isPartitionedLogsContinuous(restorable.logs, minKeyRangeVersion, restorable.targetVersion)) {
 					restorable.continuousBeginVersion = minKeyRangeVersion;
 					restorable.continuousEndVersion = restorable.targetVersion + 1; // not inclusive
