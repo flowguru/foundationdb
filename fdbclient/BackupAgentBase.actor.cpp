@@ -455,6 +455,9 @@ ACTOR static Future<Void> decodeBackupLogValue(Arena* arena,
 			} else {
 				Version ver = key_version->rangeContaining(logValue.param1).value();
 				//TraceEvent("ApplyMutation").detail("LogValue", logValue).detail("Version", version).detail("Ver", ver).detail("Apply", version > ver && ver != invalidVersion);
+				// version is the version of this mutation decoded from log
+				// ver is the old version stored in keyVersionMap
+				// as a result, only add this mutation in log when the version is larger(to work with range file)
 				if (version > ver && ver != invalidVersion) {
 					if (removePrefix.size()) {
 						logValue.param1 = logValue.param1.removePrefix(removePrefix);
@@ -903,6 +906,12 @@ ACTOR Future<Void> coalesceKeyVersionCache(Key uid,
 			lastVersion = it.value();
 		} else {
 			Version ver = it.value();
+			// ver: version from keyVersion
+			// endVersion: after applying a batch of versions from log files, the largest version
+			// if ver < endVersion, that means this key in keyVersion is outdated
+			// in this case, runClearRange on the keyVersionMapRange prefix for this key, 
+			// so that the alog key is the truth, otherwise, keyVersionMapRange should be the truth
+			// each key needs to be individually checked, because even though range file is for a range, log file does not
 			if (ver < endVersion && lastVersion < endVersion && ver != invalidVersion &&
 			    lastVersion != invalidVersion) {
 				Key removeKey = it.range().begin.withPrefix(mapPrefix);
