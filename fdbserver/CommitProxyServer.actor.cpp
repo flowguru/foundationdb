@@ -533,7 +533,7 @@ ACTOR Future<Void> addBackupMutations(ProxyCommitData* self,
 
 		Key val = valueWriter.toValue();
 
-		BinaryWriter wr(Unversioned()); // key/hash/commitVersion/part, so wr is param1
+		BinaryWriter wr(Unversioned()); // backupName/hash/commitVersion/part, so wr is param1
 
 		// Serialize the log destination
 		wr.serializeBytes(logRangeMutation->first);

@@ -240,9 +240,11 @@ public:
 		int64_t blockSize{ 0 };
 		int64_t fileSize{ 0 };
 		Version endVersion{ ::invalidVersion }; // not meaningful for range files
+		int64_t tagId = -1; // only meaningful to log files, Log router tag. Non-negative for new backup format.
+		int64_t totalTags = -1; // only meaningful to log files, Total number of log router tags.
 
 		Tuple pack() const {
-			return Tuple::makeTuple(version, fileName, (int)isRange, fileSize, blockSize, endVersion);
+			return Tuple::makeTuple(version, fileName, (int64_t)isRange, fileSize, blockSize, endVersion, tagId, totalTags);
 		}
 		static RestoreFile unpack(Tuple const& t) {
 			RestoreFile r;
@@ -253,6 +255,8 @@ public:
 			r.fileSize = t.getInt(i++);
 			r.blockSize = t.getInt(i++);
 			r.endVersion = t.getInt(i++);
+			r.tagId = t.getInt(i++);
+			r.totalTags = t.getInt(i++);
 			return r;
 		}
 	};
@@ -4159,6 +4163,7 @@ std::vector<KeyValueRef> filterLogMutationKVPairs(VectorRef<KeyValueRef> data, c
 
 	// first group mutations by version
 	for (auto& kv : data) {
+		// each kv is a [param1, param2]
 		auto versionAndChunkNumber = decodeMutationLogKey(kv.key);
 		mutationBlocksByVersion[versionAndChunkNumber.first].addChunk(versionAndChunkNumber.second, kv);
 	}
@@ -4375,428 +4380,435 @@ struct RestoreLogDataTaskFunc : RestoreFileTaskFuncBase {
 StringRef RestoreLogDataTaskFunc::name = "restore_log_data"_sr;
 REGISTER_TASKFUNC(RestoreLogDataTaskFunc);
 
-// struct RestoreDispatchPartitionedTaskFunc : RestoreTaskFuncBase {
-// 	static StringRef name;
-// 	static constexpr uint32_t version = 1;
-// 	StringRef getName() const override { return name; };
 
-// 	static struct {
-// 		static TaskParam<Version> beginVersion() { return __FUNCTION__sr; }
-// 		static TaskParam<std::string> beginFile() { return __FUNCTION__sr; }
-// 		static TaskParam<int64_t> beginBlock() { return __FUNCTION__sr; }
-// 		static TaskParam<int64_t> batchSize() { return __FUNCTION__sr; }
-// 		static TaskParam<int64_t> remainingInBatch() { return __FUNCTION__sr; }
-// 	} Params;
+void deserializeMutation() {
+	ArenaReader reader(arena, message, AssumeVersion(g_network->protocolVersion()));
 
-// 	ACTOR static Future<Void> _finish(Reference<ReadYourWritesTransaction> tr,
-// 	                                  Reference<TaskBucket> taskBucket,
-// 	                                  Reference<FutureBucket> futureBucket,
-// 	                                  Reference<Task> task) {
-// 		state RestoreConfig restore(task);
-
-// 		state Version beginVersion = Params.beginVersion().get(task);
-// 		state Reference<TaskFuture> onDone = futureBucket->unpack(task->params[Task::reservedTaskParamKeyDone]);
-
-// 		state int64_t remainingInBatch = Params.remainingInBatch().get(task);
-// 		state bool addingToExistingBatch = remainingInBatch > 0;
-// 		state Version restoreVersion;
-// 		// is onlyApplyMutationLogs useful?
-// 		state Future<Optional<bool>> onlyApplyMutationLogs = restore.onlyApplyMutationLogs().get(tr);
-
-// 		wait(store(restoreVersion, restore.restoreVersion().getOrThrow(tr)) && success(onlyApplyMutationLogs) &&
-// 		     checkTaskVersion(tr->getDatabase(), task, name, version));
-
-// 		// If not adding to an existing batch then update the apply mutations end version so the mutations from the
-// 		// previous batch can be applied.  Only do this once beginVersion is > 0 (it will be 0 for the initial
-// 		// dispatch).
-// 		if (!addingToExistingBatch && beginVersion > 0) {
-// 			// hfu5 : unblock apply alog to normal key space
-// 			// if the last file is [80, 100] and the restoreVersion is 90, we should use 90 here
-// 			// this call an additional call after last file
-// 			restore.setApplyEndVersion(tr, std::min(beginVersion, restoreVersion + 1));
-// 		}
-
-// 		// The applyLag must be retrieved AFTER potentially updating the apply end version.
-// 		state int64_t applyLag = wait(restore.getApplyVersionLag(tr));
-// 		state int64_t batchSize = Params.batchSize().get(task);
-
-// 		// If starting a new batch and the apply lag is too large then re-queue and wait
-// 		if (!addingToExistingBatch && applyLag > (BUGGIFY ? 1 : CLIENT_KNOBS->CORE_VERSIONSPERSECOND * 300)) {
-// 			// Wait a small amount of time and then re-add this same task.
-// 			wait(delay(FLOW_KNOBS->PREVENT_FAST_SPIN_DELAY));
-// 			wait(success(RestoreDispatchTaskFunc::addTask(
-// 			    tr, taskBucket, task, beginVersion, "", 0, batchSize, remainingInBatch)));
-
-// 			TraceEvent("FileRestoreDispatch")
-// 			    .detail("RestoreUID", restore.getUid())
-// 			    .detail("BeginVersion", beginVersion)
-// 			    .detail("ApplyLag", applyLag)
-// 			    .detail("BatchSize", batchSize)
-// 			    .detail("Decision", "too_far_behind")
-// 			    .detail("TaskInstance", THIS_ADDR);
-
-// 			wait(taskBucket->finish(tr, task));
-// 			return Void();
-// 		}
-
-// 		// question why do we need beginFile at all
-// 		state std::string beginFile = Params.beginFile().getOrDefault(task);
-// 		// Get a batch of files.  We're targeting batchSize blocks(30k) being dispatched so query for batchSize(150) files
-// 		// (each of which is 0 or more blocks).
-// 		state int taskBatchSize = BUGGIFY ? 1 : CLIENT_KNOBS->RESTORE_DISPATCH_ADDTASK_SIZE;
-// 		state RestoreConfig::FileSetT::RangeResultType files = wait(restore.fileSet().getRange(
-// 		    tr, Optional<RestoreConfig::RestoreFile>({ beginVersion, beginFile }), {}, taskBatchSize));
-
-// 		// allPartsDone will be set once all block tasks in the current batch are finished.
-// 		state Reference<TaskFuture> allPartsDone;
-
-// 		// If adding to existing batch then join the new block tasks to the existing batch future
-// 		if (addingToExistingBatch) {
-// 			Key fKey = wait(restore.batchFuture().getD(tr));
-// 			allPartsDone = Reference<TaskFuture>(new TaskFuture(futureBucket, fKey));
-// 		} else {
-// 			// Otherwise create a new future for the new batch
-// 			allPartsDone = futureBucket->future(tr);
-// 			restore.batchFuture().set(tr, allPartsDone->pack());
-// 			// Set batch quota remaining to batch size
-// 			remainingInBatch = batchSize;
-// 		}
-
-// 		// If there were no files to load then this batch is done and restore is almost done.
-// 		if (files.results.size() == 0) {
-// 			// If adding to existing batch then blocks could be in progress so create a new Dispatch task that waits
-// 			// for them to finish
-// 			if (addingToExistingBatch) {
-// 				// Setting next begin to restoreVersion + 1 so that any files in the file map at the restore version
-// 				// won't be dispatched again.
-// 				wait(success(RestoreDispatchTaskFunc::addTask(tr,
-// 				                                              taskBucket,
-// 				                                              task,
-// 				                                              restoreVersion + 1,
-// 				                                              "",
-// 				                                              0,
-// 				                                              batchSize,
-// 				                                              0,
-// 				                                              TaskCompletionKey::noSignal(),
-// 				                                              allPartsDone)));
-
-// 				TraceEvent("FileRestoreDispatch")
-// 				    .detail("RestoreUID", restore.getUid())
-// 				    .detail("BeginVersion", beginVersion)
-// 				    .detail("BeginFile", Params.beginFile().get(task))
-// 				    .detail("BeginBlock", Params.beginBlock().get(task))
-// 				    .detail("RestoreVersion", restoreVersion)
-// 				    .detail("ApplyLag", applyLag)
-// 				    .detail("Decision", "end_of_final_batch")
-// 				    .detail("TaskInstance", THIS_ADDR);
-// 			} else if (beginVersion < restoreVersion) {
-// 				// If beginVersion is less than restoreVersion then do one more dispatch task to get there
-// 				// there are no more files between beginVersion and restoreVersion
-// 				wait(success(RestoreDispatchTaskFunc::addTask(tr, taskBucket, task, restoreVersion, "", 0, batchSize)));
-
-// 				TraceEvent("FileRestoreDispatch")
-// 				    .detail("RestoreUID", restore.getUid())
-// 				    .detail("BeginVersion", beginVersion)
-// 				    .detail("BeginFile", Params.beginFile().get(task))
-// 				    .detail("BeginBlock", Params.beginBlock().get(task))
-// 				    .detail("RestoreVersion", restoreVersion)
-// 				    .detail("ApplyLag", applyLag)
-// 				    .detail("Decision", "apply_to_restore_version")
-// 				    .detail("TaskInstance", THIS_ADDR);
-// 			} else if (applyLag == 0) {
-// 				// If apply lag is 0 then we are done so create the completion task
-// 				wait(success(RestoreCompleteTaskFunc::addTask(tr, taskBucket, task, TaskCompletionKey::noSignal())));
-
-// 				TraceEvent("FileRestoreDispatch")
-// 				    .detail("RestoreUID", restore.getUid())
-// 				    .detail("BeginVersion", beginVersion)
-// 				    .detail("BeginFile", Params.beginFile().get(task))
-// 				    .detail("BeginBlock", Params.beginBlock().get(task))
-// 				    .detail("ApplyLag", applyLag)
-// 				    .detail("Decision", "restore_complete")
-// 				    .detail("TaskInstance", THIS_ADDR);
-// 			} else {
-// 				// Applying of mutations is not yet finished so wait a small amount of time and then re-add this
-// 				// same task.
-// 				// this is only to create a dummy one wait for it to finish
-// 				wait(delay(FLOW_KNOBS->PREVENT_FAST_SPIN_DELAY));
-// 				wait(success(RestoreDispatchTaskFunc::addTask(tr, taskBucket, task, beginVersion, "", 0, batchSize)));
-
-// 				TraceEvent("FileRestoreDispatch")
-// 				    .detail("RestoreUID", restore.getUid())
-// 				    .detail("BeginVersion", beginVersion)
-// 				    .detail("ApplyLag", applyLag)
-// 				    .detail("Decision", "apply_still_behind")
-// 				    .detail("TaskInstance", THIS_ADDR);
-// 			}
-
-// 			// If adding to existing batch then task is joined with a batch future so set done future
-// 			// Note that this must be done after joining at least one task with the batch future in case all other
-// 			// blockers already finished.
-// 			Future<Void> setDone = addingToExistingBatch ? onDone->set(tr, taskBucket) : Void();
-
-// 			wait(taskBucket->finish(tr, task) && setDone);
-// 			return Void();
-// 		}
-
-// 		// Start moving through the file list and queuing up blocks.  Only queue up to RESTORE_DISPATCH_ADDTASK_SIZE
-// 		// blocks per Dispatch task and target batchSize total per batch but a batch must end on a complete version
-// 		// boundary so exceed the limit if necessary to reach the end of a version of files.
-// 		state std::vector<Future<Key>> addTaskFutures;
-// 		state Version endVersion = files.results[0].version;
-// 		state int blocksDispatched = 0;
-// 		state int64_t beginBlock = Params.beginBlock().getOrDefault(task);
-// 		state int i = 0;
-
-// 		// for each file
-// 		// not creating a new task at this level because restore files are read back together -- both range and log
-// 		// so i have to process range files anyway.
-// 		for (; i < files.results.size(); ++i) {
-// 			RestoreConfig::RestoreFile& f = files.results[i];
-// 			// if (!f.isRange && plog) {
-// 			// 	// process plog elsewhere
-// 			// 	continue;
-// 			// }
-
-// 			// Here we are "between versions" (prior to adding the first block of the first file of a new version)
-// 			// so this is an opportunity to end the current dispatch batch (which must end on a version boundary) if
-// 			// the batch size has been reached or exceeded
-// 			if (f.version != endVersion && remainingInBatch <= 0) {
-// 				// Next start will be at the first version after endVersion at the first file first block
-// 				++endVersion;
-// 				// beginFile set to empty to indicate we are not in the middle of a range
-// 				// by middle of a range, we mean that we have rangeFile v=80, and logFile v=[80, 100], 
-// 				// then we have to include this log file too in this batch
-
-// 				// if range comes first, say range=80, log=(81, 100), then its fine we stop before the log,
-// 				// what if log comes first:
-// 				// range=80, log=(60,90), and range should not be read, but 
-// 				// what about the 80-90 part? we should not allow those to commit
-// 				beginFile = ""; 
-// 				beginBlock = 0;
-// 				break;
-// 			}
-
-// 			// Set the starting point for the next task in case we stop inside this file
-// 			endVersion = f.version;
-// 			beginFile = f.fileName;
-
-// 			state int64_t j = beginBlock * f.blockSize;
-// 			// For each block of the file
-// 			for (; j < f.fileSize; j += f.blockSize) {
-// 				// Stop if we've reached the addtask limit
-// 				if (blocksDispatched == taskBatchSize)
-// 					break;
-
-// 				if (f.isRange) {
-// 					addTaskFutures.push_back(
-// 					    RestoreRangeTaskFunc::addTask(tr,
-// 					                                  taskBucket,
-// 					                                  task,
-// 					                                  f,
-// 					                                  j,
-// 					                                  std::min<int64_t>(f.blockSize, f.fileSize - j),
-// 					                                  TaskCompletionKey::joinWith(allPartsDone)));
-// 				} else {
-// 					addTaskFutures.push_back(
-// 					    RestoreLogDataTaskFunc::addTask(tr,
-// 					                                    taskBucket,
-// 					                                    task,
-// 					                                    f,
-// 					                                    j,
-// 					                                    std::min<int64_t>(f.blockSize, f.fileSize - j),
-// 					                                    TaskCompletionKey::joinWith(allPartsDone)));
-// 				}
-
-// 				// Increment beginBlock for the file and total blocks dispatched for this task
-// 				++beginBlock;
-// 				++blocksDispatched;
-// 				--remainingInBatch;
-// 			}
-
-// 			// Stop if we've reached the addtask limit
-// 			if (blocksDispatched == taskBatchSize)
-// 				break;
-
-// 			// We just completed an entire file so the next task should start at the file after this one within
-// 			// endVersion (or later) if this iteration ends up being the last for this task
-// 			beginFile = beginFile + '\x00';
-// 			beginBlock = 0;
-
-// 			TraceEvent("FileRestoreDispatchedFile")
-// 			    .suppressFor(60)
-// 			    .detail("RestoreUID", restore.getUid())
-// 			    .detail("FileName", f.fileName)
-// 			    .detail("TaskInstance", THIS_ADDR);
-// 		}
-// 		// if (plog) {
-// 		// 	int logIndex = 0;
-// 		// 	for (; logIndex < files.results.size(); ++logIndex) {
-// 		// 		RestoreConfig::RestoreFile& f = files.results[i];
-// 		// 		if (f.isRange) {
-// 		// 			// only process plog here
-// 		// 			continue;
-// 		// 		}
-				
-// 		// 	}
-// 		// }
-
-// 		// If no blocks were dispatched then the next dispatch task should run now and be joined with the
-// 		// allPartsDone future
-// 		if (blocksDispatched == 0) {
-// 			std::string decision;
-
-// 			// If no files were dispatched either then the batch size wasn't large enough to catch all of the files
-// 			// at the next lowest non-dispatched version, so increase the batch size.
-// 			if (i == 0) {
-// 				batchSize *= 2;
-// 				decision = "increased_batch_size";
-// 			} else
-// 				decision = "all_files_were_empty";
-
-// 			TraceEvent("FileRestoreDispatch")
-// 			    .detail("RestoreUID", restore.getUid())
-// 			    .detail("BeginVersion", beginVersion)
-// 			    .detail("BeginFile", Params.beginFile().get(task))
-// 			    .detail("BeginBlock", Params.beginBlock().get(task))
-// 			    .detail("EndVersion", endVersion)
-// 			    .detail("ApplyLag", applyLag)
-// 			    .detail("BatchSize", batchSize)
-// 			    .detail("Decision", decision)
-// 			    .detail("TaskInstance", THIS_ADDR)
-// 			    .detail("RemainingInBatch", remainingInBatch);
-
-// 			wait(success(RestoreDispatchTaskFunc::addTask(tr,
-// 			                                              taskBucket,
-// 			                                              task,
-// 			                                              endVersion,
-// 			                                              beginFile,
-// 			                                              beginBlock,
-// 			                                              batchSize,
-// 			                                              remainingInBatch,
-// 			                                              TaskCompletionKey::joinWith((allPartsDone)))));
-
-// 			// If adding to existing batch then task is joined with a batch future so set done future.
-// 			// Note that this must be done after joining at least one task with the batch future in case all other
-// 			// blockers already finished.
-// 			Future<Void> setDone = addingToExistingBatch ? onDone->set(tr, taskBucket) : Void();
-
-// 			wait(setDone && taskBucket->finish(tr, task));
-
-// 			return Void();
-// 		}
-
-// 		// Increment the number of blocks dispatched in the restore config
-// 		restore.filesBlocksDispatched().atomicOp(tr, blocksDispatched, MutationRef::Type::AddValue);
-
-// 		// If beginFile is not empty then we had to stop in the middle of a version (possibly within a file) so we
-// 		// cannot end the batch here because we do not know if we got all of the files and blocks from the last
-// 		// version queued, so make sure remainingInBatch is at least 1.
-// 		if (!beginFile.empty()) {
-// 			// this is to make sure if we stop in the middle of a version, we do not end this batch
-// 			// instead next RestoreDispatchTaskFunc should have addingToExistingBatch as true
-// 			// thus they are considered the same batch and alog will be committed only when all of them succeed
-// 			remainingInBatch = std::max<int64_t>(1, remainingInBatch);
-// 		}
-
-// 		// If more blocks need to be dispatched in this batch then add a follow-on task that is part of the
-// 		// allPartsDone group which will won't wait to run and will add more block tasks.
-// 		if (remainingInBatch > 0)
-// 			addTaskFutures.push_back(RestoreDispatchTaskFunc::addTask(tr,
-// 			                                                          taskBucket,
-// 			                                                          task,
-// 			                                                          endVersion,
-// 			                                                          beginFile,
-// 			                                                          beginBlock,
-// 			                                                          batchSize,
-// 			                                                          remainingInBatch,
-// 			                                                          TaskCompletionKey::joinWith(allPartsDone)));
-// 		else // Otherwise, add a follow-on task to continue after all previously dispatched blocks are done
-// 			addTaskFutures.push_back(RestoreDispatchTaskFunc::addTask(tr,
-// 			                                                          taskBucket,
-// 			                                                          task,
-// 			                                                          endVersion,
-// 			                                                          beginFile,
-// 			                                                          beginBlock,
-// 			                                                          batchSize,
-// 			                                                          0,
-// 			                                                          TaskCompletionKey::noSignal(),
-// 			                                                          allPartsDone));
-
-// 		wait(waitForAll(addTaskFutures));
-
-// 		// If adding to existing batch then task is joined with a batch future so set done future.
-// 		Future<Void> setDone = addingToExistingBatch ? onDone->set(tr, taskBucket) : Void();
-
-// 		wait(setDone && taskBucket->finish(tr, task));
-
-// 		TraceEvent("FileRestoreDispatch")
-// 		    .detail("RestoreUID", restore.getUid())
-// 		    .detail("BeginVersion", beginVersion)
-// 		    .detail("BeginFile", Params.beginFile().get(task))
-// 		    .detail("BeginBlock", Params.beginBlock().get(task))
-// 		    .detail("EndVersion", endVersion)
-// 		    .detail("ApplyLag", applyLag)
-// 		    .detail("BatchSize", batchSize)
-// 		    .detail("Decision", "dispatched_files")
-// 		    .detail("FilesDispatched", i)
-// 		    .detail("BlocksDispatched", blocksDispatched)
-// 		    .detail("TaskInstance", THIS_ADDR)
-// 		    .detail("RemainingInBatch", remainingInBatch);
-
-// 		return Void();
-// 	}
-
-// 	ACTOR static Future<Key> addTask(Reference<ReadYourWritesTransaction> tr,
-// 	                                 Reference<TaskBucket> taskBucket,
-// 	                                 Reference<Task> parentTask,
-// 	                                 Version beginVersion,
-// 	                                 std::string beginFile,
-// 	                                 int64_t beginBlock,
-// 	                                 int64_t batchSize,
-// 	                                 int64_t remainingInBatch = 0,
-// 	                                 TaskCompletionKey completionKey = TaskCompletionKey::noSignal(),
-// 	                                 Reference<TaskFuture> waitFor = Reference<TaskFuture>()) {
-// 		Key doneKey = wait(completionKey.get(tr, taskBucket));
-
-// 		// Use high priority for dispatch tasks that have to queue more blocks for the current batch
-// 		unsigned int priority = (remainingInBatch > 0) ? 1 : 0;
-// 		state Reference<Task> task(
-// 		    new Task(RestoreDispatchTaskFunc::name, RestoreDispatchTaskFunc::version, doneKey, priority));
-
-// 		// Create a config from the parent task and bind it to the new task
-// 		wait(RestoreConfig(parentTask).toTask(tr, task));
-// 		Params.beginVersion().set(task, beginVersion);
-// 		Params.batchSize().set(task, batchSize);
-// 		Params.remainingInBatch().set(task, remainingInBatch);
-// 		Params.beginBlock().set(task, beginBlock);
-// 		Params.beginFile().set(task, beginFile);
-
-// 		if (!waitFor) {
-// 			return taskBucket->addTask(tr, task);
-// 		}
-
-// 		wait(waitFor->onSetAddTask(tr, taskBucket, task));
-// 		return "OnSetAddTask"_sr;
-// 	}
-
-// 	Future<Void> execute(Database cx,
-// 	                     Reference<TaskBucket> tb,
-// 	                     Reference<FutureBucket> fb,
-// 	                     Reference<Task> task) override {
-// 		return Void();
-// 	};
-// 	Future<Void> finish(Reference<ReadYourWritesTransaction> tr,
-// 	                    Reference<TaskBucket> tb,
-// 	                    Reference<FutureBucket> fb,
-// 	                    Reference<Task> task) override {
-// 		return _finish(tr, tb, fb, task);
-// 	};
-// };
-// StringRef RestoreDispatchPartitionedTaskFunc::name = "restore_dispatch"_sr;
-// REGISTER_TASKFUNC(RestoreDispatchPartitionedTaskFunc);
+	// Return false for LogProtocolMessage and SpanContextMessage metadata messages.
+	if (LogProtocolMessage::isNextIn(reader))
+		return false;
+	if (reader.protocolVersion().hasSpanContext() && SpanContextMessage::isNextIn(reader))
+		return false;
+	if (reader.protocolVersion().hasOTELSpanContext() && OTELSpanContextMessage::isNextIn(reader)) {
+		CODE_PROBE(true, "Returning false for OTELSpanContextMessage");
+		return false;
+	}
+	reader >> *m;
+}
 
 
+// this method takes a version and a list of list of mutations of this verison,
+// each list is returned from a iterator sorted by sub
+// it will first add all mutations in subsequence order
+// then combine them in old-format (param1, parma2) and return
+// this method assumes that iterator can return a list of mutations
+/*
+	mutations are serialized in file as below format:
+		`<BlockHeader>`
+		`<Version_1><Subseq_1><Mutation1_len><Mutation1>`
+		`<Version_2><Subseq_2><Mutation2_len><Mutation2>`
+		`…`
+		`<Padding>
+
+	for now, assume each iterator returns a vector<pair<subsequence, mutation> > 
+	noted that the mutation's arena has to be valid during the execution
+	
+	according to BackupWorker::addMutation, version has 64, sub has 32 and mutation length has 32
+	So iterator will combine all mutations in the same version and return a vector
+	iterator should also return the subsequence together with each mutation
+	as here we will do another mergeSort for subsequence again to decide the order
+	and here we will decode the stringref
+
+
+	Version currentVersion;
+	uint32_t sub;
+	uint32_t mutationSize;
+	BinaryReader rd(str, Unversioned());
+	rd >> currentVersion >> sub >> mutationSize;
+*/
+std::vector<Standalone<KeyValueRef>> generateOldFormatMutations(Version commitVersion,
+	Standalone<VectorRef<KeyValueRef>> results;
+	std::vector<std::vector<std::pair<uint32_t, StringRef> > >& newFormatMutations) {
+	std::vector<Standalone<VectorRef<KeyValueRef>>> oldFormatMutations;
+	// mergeSort subversion here
+	// just do a global sort for everyone
+	state int int64_t totalBytes = 0;
+	std::map<uint32_t, std::vector<StringRef> > mutationsBySub;
+	for (auto& vec : newFormatMutations) {
+		for (auto& p : vec) {
+			uint32_t sub = p.first;
+			StringRef m =  p.second;
+			// transform the mutation format and add to each subversion
+			// where is mutation written in new format
+			StringRef mutationOldFormat = transformMutationToOldFormat(m);
+			mutationsBySub[sub].push_back(mutationOldFormat);
+			totalBytes += mutationOldFormat.size();
+		}
+	}
+	BinaryWriter param2Writer(Unversioned());
+	param2Writer << totalBytes;
+
+	for (auto& it : mutationsBySub) {
+		// concatenate them to param2Str
+		param2Writer.serializeBytes(it.second);
+	}
+	Key param2Concat = param2Writer.toValue();
+
+	// deal with param1
+	state int32_t hashBase = commitVersion / CLIENT_KNOBS->LOG_RANGE_BLOCK_SIZE;
+	int32_t part;
+
+	BinaryWriter wrParam1(Unversioned()); // hash/commitVersion/part
+	wrParam1 << (uint8_t)hashlittle(&hashBase, sizeof(hashBase), 0);
+	wrParam1 << bigEndian64(commitVersion);
+	uint32_t* partBuffer = nullptr;
+
+	// just generate a list of (param1, param2)
+	// are they mutations or are they key value
+	// param2 has format: length_of_the_mutation_group | encoded_mutation_1 | … | encoded_mutation_k
+	// each mutation has format type|kLen|vLen|Key|Value
+	BinaryWriter wrParam2 = BinaryWriter(Unversioned());
+	// decide how many mutations in this param2
+	wrParam2 << logRangeMutation->second.totalSize();
+	for (int part = 0; part * CLIENT_KNOBS->MUTATION_BLOCK_SIZE < val.size(); part++) {
+		KeyValueRef backupKV;
+		// Assign the second parameter as the part
+		backupKV.value = param2Concat.substr(
+			part * CLIENT_KNOBS->MUTATION_BLOCK_SIZE,
+			std::min(param2Concat.size() - part * CLIENT_KNOBS->MUTATION_BLOCK_SIZE, CLIENT_KNOBS->MUTATION_BLOCK_SIZE));
+		// Write the last part of the mutation to the serialization, if the buffer is not defined
+		if (!partBuffer) {
+			// part = 0
+			wrParam1 << bigEndian32(part);
+			// Define the last buffer part
+			partBuffer = (uint32_t*)((char*)wrParam1.getData() + wr.getLength() - sizeof(uint32_t));
+		} else {
+			// part > 0
+			*partBuffer = bigEndian32(part);
+		}
+		backupKV.key = wrParam1.toValue();
+		results.push_back_deep(backupKV);
+	}
+	return results;
+}
+
+struct RestoreDispatchPartitionedTaskFunc : RestoreTaskFuncBase {
+	static StringRef name;
+	static constexpr uint32_t version = 1;
+	StringRef getName() const override { return name; };
+
+	static struct {
+		static TaskParam<Version> beginVersion() { return __FUNCTION__sr; }
+		static TaskParam<Version> endVersion() { return __FUNCTION__sr; }
+	} Params;
+
+	ACTOR static Future<Void> _finish(Reference<ReadYourWritesTransaction> tr,
+	                                  Reference<TaskBucket> taskBucket,
+	                                  Reference<FutureBucket> futureBucket,
+	                                  Reference<Task> task) {
+		state RestoreConfig restore(task);
+
+		state Version beginVersion = Params.beginVersion().get(task);
+		state Version endVersion = Params.endVersion().get(task);
+
+		state Reference<TaskFuture> onDone = futureBucket->unpack(task->params[Task::reservedTaskParamKeyDone]);
+
+		state Version restoreVersion;
+
+		wait(store(restoreVersion, restore.restoreVersion().getOrThrow(tr)) &&
+		     checkTaskVersion(tr->getDatabase(), task, name, version));
+
+		state int nextEndVersion = std::min(restoreVersion, endVersion + CLIENT_KNOBS->RESTORE_PARTITIONED_BATCH_VERSION_SIZE);
+		// update the apply mutations end version so the mutations from the
+		// previous batch can be applied. 
+		// Only do this once beginVersion is > 0 (it will be 0 for the initial dispatch).
+		if (beginVersion > 0) {
+			// hfu5 : unblock apply alog to normal key space
+			// if the last file is [80, 100] and the restoreVersion is 90, we should use 90 here
+			// this call an additional call after last file
+			restore.setApplyEndVersion(tr, std::min(beginVersion, restoreVersion + 1));
+		}
+
+		// The applyLag must be retrieved AFTER potentially updating the apply end version.
+		state int64_t applyLag = wait(restore.getApplyVersionLag(tr));
+
+		// this is to guarantee commit proxy is catching up doing apply alog -> normal key
+		// with this  backupFile -> alog process
+		// If starting a new batch and the apply lag is too large then re-queue and wait
+		if (applyLag > (BUGGIFY ? 1 : CLIENT_KNOBS->CORE_VERSIONSPERSECOND * 300)) {
+			// Wait a small amount of time and then re-add this same task.
+			wait(delay(FLOW_KNOBS->PREVENT_FAST_SPIN_DELAY));
+			wait(success(RestoreDispatchPartitionedTaskFunc::addTask(
+			    tr, taskBucket, task, beginVersion, endVersion)));
+
+			TraceEvent("RestorePartitionDispatch")
+			    .detail("RestoreUID", restore.getUid())
+			    .detail("BeginVersion", beginVersion)
+			    .detail("ApplyLag", applyLag)
+			    .detail("Decision", "too_far_behind")
+			    .detail("TaskInstance", THIS_ADDR);
+
+			wait(taskBucket->finish(tr, task));
+			return Void();
+		}
+
+		// Get a batch of files.  We're targeting batchSize blocks(30k) being dispatched so query for batchSize(150) files
+		// (each of which is 0 or more blocks).
+		state RestoreConfig::FileSetT::RangeResultType files = wait(restore.fileSet().getRange(
+		    tr, Optional<RestoreConfig::RestoreFile>({ beginVersion }), Optional<RestoreConfig::RestoreFile>({ endVersion })));
+
+		state int64_t maxTagID = 0;
+		state std::vector<RestoreConfig::RestoreFile> logs, ranges;
+		for (auto f : files.results) {
+			if (f.isRange) {
+				ranges.push_back(f);
+			} else {
+				logs.push_back(f);
+				maxTagId = std::max(maxTagID, f.tagId);
+			}
+		}
+		// allPartsDone will be set once all block tasks in the current batch are finished.
+		// create a new future for the new batch
+		state Reference<TaskFuture> allPartsDone = allPartsDone = futureBucket->future(tr);		
+		restore.batchFuture().set(tr, allPartsDone->pack());
+
+		// if there are no files, if i am not the last batch, then on to the next batch
+		// if there are no files and i am the last batch, then just wait for applying to finish
+		// do we need this files.results.size() == 0 at all?
+		// if (files.results.size() == 0 && beginVersion >= restoreVersion) {
+		if (beginVersion >= restoreVersion) {
+			 if (applyLag == 0) {
+				// i am the last batch
+				// If apply lag is 0 then we are done so create the completion task
+				wait(success(RestoreCompleteTaskFunc::addTask(tr, taskBucket, task, TaskCompletionKey::noSignal())));
+
+				TraceEvent("RestorePartitionDispatch")
+				    .detail("RestoreUID", restore.getUid())
+				    .detail("BeginVersion", beginVersion)
+				    .detail("ApplyLag", applyLag)
+				    .detail("Decision", "restore_complete")
+				    .detail("TaskInstance", THIS_ADDR);
+			} else {
+				// i am the last batch, and applyLag is not zero, then I will create another dummy task to wait
+				// for apply log to be zero, then it will go into the branch above.
+				// Applying of mutations is not yet finished so wait a small amount of time and then re-add this
+				// same task.
+				// this is only to create a dummy one wait for it to finish
+				wait(delay(FLOW_KNOBS->PREVENT_FAST_SPIN_DELAY));
+				wait(success(RestoreDispatchTaskFunc::addTask(tr, taskBucket, task, beginVersion, endVersion)));
+
+				TraceEvent("RestorePartitionDispatch")
+				    .detail("RestoreUID", restore.getUid())
+				    .detail("BeginVersion", beginVersion)
+				    .detail("ApplyLag", applyLag)
+				    .detail("Decision", "apply_still_behind")
+				    .detail("TaskInstance", THIS_ADDR);
+			}
+
+			// If adding to existing batch then task is joined with a batch future so set done future
+			// Note that this must be done after joining at least one task with the batch future in case all other
+			// blockers already finished.
+			Future<Void> setDone = addingToExistingBatch ? onDone->set(tr, taskBucket) : Void();
+
+			wait(taskBucket->finish(tr, task) && setDone);
+			return Void();
+		}
+
+		// if we reach here, this batch is not empty(i.e. we have range and/or mutation files in this)
+
+		// Start moving through the file list and queuing up blocks.  Only queue up to RESTORE_DISPATCH_ADDTASK_SIZE
+		// blocks per Dispatch task and target batchSize total per batch but a batch must end on a complete version
+		// boundary so exceed the limit if necessary to reach the end of a version of files.
+		state std::vector<Future<Key>> addTaskFutures;
+		state int versionRestored = 0;
+		state int i = 0;
+		// need to process all range files, because RestoreRangeTaskFunc takes a block offset, keep using ti here.
+		// this can be done first, because they are not overlap within a restore uid
+		// each task will read the file, restore those key to their original keys after clear that range
+		// also it will update the keyVersionMap[key -> versionFromRangeFile]
+		// by this time, corresponding mutation files within the same version range has not been applied yet
+		// because they are waiting for the singal of this RestoreDispatchPartitionedTaskFunc
+		// when log are being applied, they will compare version of key to the keyVersionMap updated by range file
+		// after each RestoreDispatchPartitionedTaskFunc, keyVersionMap will be clear if mutation version is larger.
+		for (; i < ranges.size(); ++i) {
+			RestoreConfig::RestoreFile& f = ranges[i];
+			state int64_t j = beginBlock * f.blockSize;
+			// For each block of the file
+			for (; j < f.fileSize; j += f.blockSize) {
+				addTaskFutures.push_back(
+					RestoreRangeTaskFunc::addTask(tr,
+													taskBucket,
+													task,
+													f,
+													j,
+													std::min<int64_t>(f.blockSize, f.fileSize - j),
+													TaskCompletionKey::joinWith(allPartsDone)));
+			}
+			beginBlock = 0;
+		}
+		// aggregate logs by tag id
+		std::vector<vector<RestoreConfig::RestoreFile> > filesByTag(maxTagID + 1);
+		for (RestoreConfig::RestoreFile& f : logs) {
+			// find the tag, aggregate files by tags
+			if (f.tagId == -1) {
+				// inconsistent data
+				TraceEvent("PartitionedLogFileNoTag", SevError)
+					.detail("FileName", f.fileName)
+					.detail("FileSize", f.fileSize)
+					.log();
+			} else {
+				filesByTag[f.tagId].push_back(f);
+			}
+		}
+
+		state std::vector<Reference<PartitionedLogIterator>> iterators(maxTagID + 1);
+		// for each tag, create an iterator
+		for (int k = 0; k < filesByTag.size(); k++) {
+			Reference<PartitionedLogIterator> it(;
+			iterators[i] = makeReference<PartitionedLogIterator>(k, filesByTag[k]);
+		}
+	
+		// mergeSort all iterator until all are exhausted
+		int totalItereators = iterators.size()
+		// it stores all mutations for the next min version, in new format
+		std::vector<Standalone<VectorRef<KeyValueRef>>> mutationsSingleVersion;
+		bool atLeastOneIteratorHasNext = true;
+		while (atLeastOneIteratorHasNext) {
+			atLeastOneIteratorHasNext = false;
+			int64_t minVersion = std::numeric_limits<int64_t>::max();
+			for (int k = 0; k < totalItereators; k++) {
+				if (!iterators[i]->hasNext()) {
+					continue;
+				}
+				// TODO: maybe embed filtering key into iterator, 
+				// as a result, backup agent should not worry about key range filtering
+				atLeastOneIteratorHasNext = true;
+				Version v = iterators[i]->peekNextVersion();
+				if (v < minVersion) {
+					minVersion = v;
+					mutationsSingleVersion.clear();
+					mutationsSingleVersion.push_back(iterators[i]->getNext());
+				} else if (v == minVersion) {
+					mutationsSingleVersion.push_back(iterators[i]->getNext());
+				}
+			}
+
+			if (atLeastOneIteratorHasNext) {
+				// transform from new format to old format(param1, param2)
+				// in the current implementation, each version will trigger a mutation
+				// if each version data is too small, we might want to combine multiple versions
+				// for a single mutation
+				std::vector<Standalone<KeyValueRef>> oldFormatMutations = generateOldFormatMutations(mutationsSingleVersion);
+				state int mutationIndex = 0;
+				state int txBytes = 0;
+				state int totalMutation = oldFormatMutations.size();
+				state int txBytesLimit = CLIENT_KNOBS->RESTORE_PARTITIONED_TX_BYTES_LIMIT;
+				state Key mutationLogPrefix = restore.mutationLogPrefix();
+
+				loop {
+					try {
+						if (mutationIndex == mutationTotalCount) {
+							break;
+						}
+						txBytes = 0;
+						tr.reset();
+						tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+						tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+
+						while (mutationIndex < totalMutation && txBytes < txBytesLimit) {
+							Key k = oldFormatMutations[mutationIndex].key.withPrefix(mutationLogPrefix);
+							ValueRef v = oldFormatMutations[mutationIndex].value; // each KV is a [param1 with added prefix -> param2]
+							tr->set(k, v);
+							txBytes += k.expectedSize();
+							txBytes += v.expectedSize();
+						}
+						wait(tr->commit());
+					} catch (Error& e) {
+						if (e.code() == error_code_transaction_too_large)
+							txBytesLimit /= 2;
+						else
+							wait(tr->onError(e));
+					}
+				}
+				++versionRestored;
+			}
+			mutationsSingleVersion.clear();
+		}
+		
+		// even if file exsists, but they are empty, in this case just start the next batch
+		if (versionRestored == 0) {
+			addTaskFutures.push_back(RestoreDispatchPartitionedTaskFunc::addTask(tr,
+																taskBucket,
+																task,
+																endVersion,
+																nextEndVersion));
+			return Void();
+		}
+
+		addTaskFutures.push_back(RestoreDispatchPartitionedTaskFunc::addTask(tr,
+			                                                          taskBucket,
+			                                                          task,
+			                                                          endVersion,
+			                                                          nextEndVersion,
+			                                                          TaskCompletionKey::noSignal(),
+			                                                          allPartsDone));
+
+		wait(waitForAll(addTaskFutures));
+		wait(taskBucket->finish(tr, task));
+
+		TraceEvent("RestorePartitionDispatch")
+		    .detail("RestoreUID", restore.getUid())
+		    .detail("BeginVersion", beginVersion)
+		    .detail("EndVersion", endVersion)
+		    .detail("ApplyLag", applyLag)
+		    .detail("Decision", "dispatch_batch_complete")
+		    .detail("TaskInstance", THIS_ADDR);
+
+		return Void();
+	}
+
+	ACTOR static Future<Key> addTask(Reference<ReadYourWritesTransaction> tr,
+	                                 Reference<TaskBucket> taskBucket,
+	                                 Reference<Task> parentTask,
+	                                 Version beginVersion,
+	                                 Version endVersion,
+	                                 TaskCompletionKey completionKey = TaskCompletionKey::noSignal(),
+	                                 Reference<TaskFuture> waitFor = Reference<TaskFuture>()) {
+		Key doneKey = wait(completionKey.get(tr, taskBucket));
+
+		// Use high priority for dispatch tasks that have to queue more blocks for the current batch
+		unsigned int priority = 0;
+		state Reference<Task> task(
+		    new Task(RestoreDispatchTaskFunc::name, RestoreDispatchTaskFunc::version, doneKey, priority));
+
+		// Create a config from the parent task and bind it to the new task
+		wait(RestoreConfig(parentTask).toTask(tr, task));
+		Params.beginVersion().set(task, beginVersion);
+		Params.endVersion().set(task, endVersion);
+
+		if (!waitFor) {
+			return taskBucket->addTask(tr, task);
+		}
+
+		wait(waitFor->onSetAddTask(tr, taskBucket, task));
+		return "OnSetAddTask"_sr;
+	}
+
+	Future<Void> execute(Database cx,
+	                     Reference<TaskBucket> tb,
+	                     Reference<FutureBucket> fb,
+	                     Reference<Task> task) override {
+		return Void();
+	};
+	Future<Void> finish(Reference<ReadYourWritesTransaction> tr,
+	                    Reference<TaskBucket> tb,
+	                    Reference<FutureBucket> fb,
+	                    Reference<Task> task) override {
+		return _finish(tr, tb, fb, task);
+	};
+};
+StringRef RestoreDispatchPartitionedTaskFunc::name = "restore_dispatch"_sr;
+REGISTER_TASKFUNC(RestoreDispatchPartitionedTaskFunc);
 struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 	static StringRef name;
 	static constexpr uint32_t version = 1;
