@@ -224,7 +224,19 @@ size_t ArenaBlock::totalSize() const {
 			totalSizeEstimate += r->aligned4kBufferSize;
 		} else {
 			allowAccess(r->next);
+			TraceEvent("FlowGuruArenaNextBefore")
+				.detail("Cur", (char*)getData())
+				.detail("Next", (char*)r->next)
+				.log();
+			printf("FlowGuruArenaNextBefore cur=%p ptr=%p\n", getData(), r->next);
+
 			totalSizeEstimate += r->next->totalSize();
+			printf("FlowGuruArenaNextAfter size=%d cur=%p ptr=%p\n", totalSizeEstimate, getData(), r->next);
+			TraceEvent("FlowGuruArenaNextAfter")
+				.detail("Size", totalSizeEstimate)
+				.detail("Cur", (char*)getData())
+				.detail("Next", (char*)r->next)
+				.log();
 			disallowAccess(r->next);
 		}
 		o = r->nextBlockOffset;
